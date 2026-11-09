@@ -1,0 +1,8 @@
+backups/
+third_party/*.zip
+third_party/android_kernel_xiaomi_stone/
+third_party/toolchain/
+third_party/busybox-aarch64/
+third_party/droidian-rootfs/
+out/
+kernel/build/

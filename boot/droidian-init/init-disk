@@ -1,0 +1,101 @@
+#!/bin/sh
+# Mount the Droidian rootfs read-write so its journal can replay, write
+# plain-text logs onto userdata, then export that partition read-only
+# as a USB disk. Does not switch_root and does not format.
+
+export PATH=/bin
+
+log() {
+    echo "stone-disk: $*" > /dev/kmsg
+}
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /userdata /newroot /config
+mount -t devpts devpts /dev/pts
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 50 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+[ -n "$USERDATA" ] || log "userdata node missing"
+
+if [ -n "$USERDATA" ] && mount -t ext4 -o rw "$USERDATA" /userdata; then
+    log "mounted $USERDATA"
+    mkdir -p /userdata/stone-logs
+    if [ -f /userdata/rootfs.img ]; then
+        mknod /dev/loop0 b 7 0 2>/dev/null || true
+        if mount -o loop,rw /userdata/rootfs.img /newroot; then
+            log "rootfs mounted read-write"
+            mkdir -p /newroot/proc /newroot/sys /newroot/dev
+            mount --bind /proc /newroot/proc
+            mount --bind /sys /newroot/sys
+            mount --bind /dev /newroot/dev
+            chroot /newroot /usr/bin/journalctl --no-pager --all -o short-iso \
+                > /userdata/stone-logs/journal.txt 2> /userdata/stone-logs/journal.err \
+                || log "journalctl failed"
+            chroot /newroot /usr/bin/journalctl -k --no-pager --all -o short-iso \
+                > /userdata/stone-logs/journal-kmsg.txt 2>> /userdata/stone-logs/journal.err \
+                || true
+            umount /newroot/dev /newroot/sys /newroot/proc 2>/dev/null || true
+            umount /newroot || log "umount rootfs failed"
+        else
+            log "rootfs loop mount failed"
+            echo "rootfs loop mount failed" > /userdata/stone-logs/mount.err
+        fi
+    else
+        echo "rootfs.img missing" > /userdata/stone-logs/mount.err
+    fi
+    dmesg > /userdata/stone-logs/dmesg-this-boot.txt 2>/dev/null || true
+    chmod 644 /userdata/stone-logs/* 2>/dev/null || true
+    sync
+    umount /userdata || log "umount userdata failed"
+else
+    log "userdata mount failed"
+fi
+
+mount -t configfs none /config || log "configfs mount failed"
+G=/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/mass_storage.0"
+echo 0x1d6b > "$G/idVendor"
+echo 0x0104 > "$G/idProduct"
+echo 0x0100 > "$G/bcdDevice"
+echo 0x0200 > "$G/bcdUSB"
+echo stone-ut > "$G/strings/0x409/manufacturer"
+echo stone-userdata > "$G/strings/0x409/product"
+echo stone > "$G/strings/0x409/serialnumber"
+echo disk > "$G/configs/c.1/strings/0x409/configuration"
+echo 120 > "$G/configs/c.1/MaxPower"
+echo 1 > "$G/functions/mass_storage.0/lun.0/ro"
+echo 0 > "$G/functions/mass_storage.0/lun.0/cdrom"
+echo 1 > "$G/functions/mass_storage.0/lun.0/removable"
+if [ -n "$USERDATA" ]; then
+    echo "$USERDATA" > "$G/functions/mass_storage.0/lun.0/file" || log "lun file failed"
+fi
+ln -s "$G/functions/mass_storage.0" "$G/configs/c.1/" 2>/dev/null || true
+UDC=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+if [ -n "$UDC" ]; then
+    echo "$UDC" > "$G/UDC" && log "disk bound to $UDC" || log "UDC bind failed"
+else
+    log "no UDC"
+fi
+
+while true; do
+    sleep 3600
+done

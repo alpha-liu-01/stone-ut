@@ -1,0 +1,476 @@
+#!/bin/sh
+# Make Droidian's journal persistent, then reboot to the bootloader.
+# The shipped image forces Storage=volatile, so the previous boot left nothing.
+
+export PATH=/bin
+
+log() {
+    echo "stone-patch: $*" > /dev/kmsg
+}
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 50 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+
+mkdir -p /userdata /newroot
+if ! mount -t ext4 -o rw "$USERDATA" /userdata; then
+    log "userdata mount failed"
+    exec sh
+fi
+mknod /dev/loop0 b 7 0 2>/dev/null || true
+if ! mount -o loop,rw /userdata/rootfs.img /newroot; then
+    log "rootfs mount failed"
+    exec sh
+fi
+
+# The generic rootfs is packed full. The last boot could not finish writing
+# dmesg, so the linker error never reached the disk. Drop caches and the
+# old journal; apt lists are not needed to boot.
+rm -rf /newroot/var/cache/apt/archives \
+    /newroot/var/cache/swcatalog \
+    /newroot/var/lib/swcatalog \
+    /newroot/var/log/journal \
+    /newroot/var/log/apt \
+    /newroot/var/log/stone-kmsg.txt \
+    /newroot/var/log/stone-kmsg.txt.new \
+    /newroot/var/log/stone-journal.txt \
+    /newroot/var/log/stone-journal.txt.new \
+    /newroot/var/log/stone-logcat.txt \
+    /newroot/var/log/stone-logcat.txt.new \
+    /newroot/var/log/stone-brief.txt \
+    /newroot/var/log/stone-brief.txt.new
+mkdir -p /newroot/usr/local/lib/stone
+cp /stone-libc++.so /newroot/usr/local/lib/stone/libc++.so
+chmod 644 /newroot/usr/local/lib/stone/libc++.so
+cp /stone-libapexsupport.so /newroot/usr/local/lib/stone/libapexsupport.so
+chmod 644 /newroot/usr/local/lib/stone/libapexsupport.so
+
+mkdir -p /newroot/etc/systemd/journald.conf.d \
+    /newroot/usr/local/sbin \
+    /newroot/etc/systemd/system/sysinit.target.wants
+
+cat > /newroot/etc/systemd/journald.conf.d/99-stone.conf << 'EOF'
+[Journal]
+Storage=persistent
+SyncIntervalSec=2s
+SystemMaxUse=48M
+EOF
+
+# ext4 keeps 5% for root only, so a full rootfs leaves the phosh user unable
+# to write its home directory. Translations and docs are not needed to boot.
+for d in /newroot/usr/share/locale/*; do
+    case "${d##*/}" in
+        en*|zh*|C|C.*|locale.alias) ;;
+        *) rm -rf "$d" ;;
+    esac
+done
+rm -rf /newroot/usr/share/doc/*
+
+# Run phosh straight on the kernel's DRM device (the same path plymouth uses
+# for the logo) instead of the Android hwcomposer. Rendering is in software.
+S=/newroot/etc/systemd/system
+mkdir -p "$S/phosh.service.d" "$S/android-mount.service.d" \
+    /newroot/etc/phosh /newroot/etc/environment.d /newroot/usr/local/bin
+: > "$S/phosh.service.d/20-wlroots-hwc-env.conf"
+: > "$S/phosh.service.d/40-droid-wait.conf"
+cat > "$S/phosh.service.d/60-stone-drm.conf" << 'EOF'
+[Unit]
+After=systemd-logind.service plymouth-quit-wait.service
+
+[Service]
+Environment=WLR_BACKENDS=drm,libinput
+Environment=WLR_RENDERER=pixman
+Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
+Environment=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+Environment=GSK_RENDERER=cairo
+Environment=LD_PRELOAD=
+UnsetEnvironment=EGL_PLATFORM
+ExecStart=
+ExecStart=capsh --noamb -- -c "exec /usr/local/bin/stone-phosh-session"
+EOF
+cat > /newroot/usr/local/bin/stone-phosh-session << 'EOF'
+#!/bin/sh
+# Plymouth drives this panel with the legacy KMS API. Try that first, then
+# alternate with atomic on each restart so one boot tests both.
+n=$(cat /tmp/stone-phosh-try 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > /tmp/stone-phosh-try
+if [ $((n % 2)) -eq 1 ]; then
+    export WLR_DRM_NO_ATOMIC=1
+fi
+echo "stone-phosh: try $n WLR_DRM_NO_ATOMIC=${WLR_DRM_NO_ATOMIC:-0}"
+ls -l /dev/dri /dev/input 2>&1
+exec /usr/bin/phosh-session
+EOF
+chmod 755 /newroot/usr/local/bin/stone-phosh-session
+cat > /newroot/etc/profile.d/zzz-stone-drm.sh << 'EOF'
+# Mesa instead of libhybris for the phosh session.
+unset EGL_PLATFORM
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+export LIBGL_ALWAYS_SOFTWARE=1
+export GSK_RENDERER=cairo
+export LD_PRELOAD=
+EOF
+cat > /newroot/etc/environment.d/90-stone-drm.conf << 'EOF'
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+LIBGL_ALWAYS_SOFTWARE=1
+GSK_RENDERER=cairo
+EOF
+cat > /newroot/etc/phosh/phoc.ini << 'EOF'
+[output:DSI-1]
+scale = 3
+
+[output:HWCOMPOSER-1]
+scale = 3
+EOF
+# Keep the Android container from starting and grabbing the display. The
+# packaged unit is kept beside the mask so it can be restored.
+if [ -s "$S/lxc@android.service" ] && [ ! -L "$S/lxc@android.service" ]; then
+    cp "$S/lxc@android.service" "$S/lxc@android.service.stone-orig"
+fi
+rm -f "$S/lxc@android.service"
+ln -sfn /dev/null "$S/lxc@android.service"
+ln -sfn /dev/null "$S/android-service@hwcomposer.service"
+# The hwcomposer unit's 20-phosh.conf was the only thing that started phosh.
+mkdir -p "$S/graphical.target.wants"
+ln -sfn /usr/lib/systemd/system/phosh.service "$S/graphical.target.wants/phosh.service"
+
+cat > /newroot/usr/local/sbin/stone-log.sh << 'EOF'
+#!/bin/sh
+while true; do
+    journalctl -b --no-pager -o short-monotonic 2>/dev/null \
+        | grep -Ei 'phoc|phosh|wlr|drm|libseat|seat0|gnome-session|stone-phosh|stone-usbnet|sshd|ssh\.service' \
+        > /var/log/stone-brief.txt.new || true
+    if [ -s /var/log/stone-brief.txt.new ]; then
+        mv /var/log/stone-brief.txt.new /var/log/stone-brief.txt
+    fi
+    sync
+    dmesg > /var/log/stone-kmsg.txt.new && mv /var/log/stone-kmsg.txt.new /var/log/stone-kmsg.txt
+    journalctl -b --no-pager --all -o short-iso > /var/log/stone-journal.txt.new 2>/dev/null || true
+    if [ -s /var/log/stone-journal.txt.new ]; then
+        mv /var/log/stone-journal.txt.new /var/log/stone-journal.txt
+    fi
+    timeout 5 logcat -d -b all -v brief > /var/log/stone-logcat.txt.new 2>/var/log/stone-logcat.err \
+        && mv /var/log/stone-logcat.txt.new /var/log/stone-logcat.txt || true
+    sync
+    sleep 2
+done
+EOF
+chmod 755 /newroot/usr/local/sbin/stone-log.sh
+
+cat > /newroot/etc/systemd/system/stone-log.service << 'EOF'
+[Unit]
+Description=Flush boot logs to the rootfs
+DefaultDependencies=no
+After=systemd-journald.service
+Before=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/stone-log.sh
+Restart=always
+
+[Install]
+WantedBy=sysinit.target
+EOF
+
+ln -sfn /etc/systemd/system/stone-log.service \
+    /newroot/etc/systemd/system/sysinit.target.wants/stone-log.service
+
+# /vendor and the other Android paths are symlinks into /android, and those
+# directories are not created in the generic rootfs. mount then fails with
+# "symbolic link to nowhere" and android-mount exits before LXC starts.
+mkdir -p /newroot/android/vendor /newroot/android/vendor_dlkm \
+    /newroot/android/system /newroot/android/system_ext \
+    /newroot/android/product /newroot/android/odm \
+    /newroot/android/data /newroot/android/apex /newroot/android/metadata
+
+# parse-android-dynparts is built to read metadata slot 0, which on this
+# device is the inactive slot. One instruction selects the slot number.
+BIN=/newroot/usr/sbin/parse-android-dynparts
+dd if="$BIN" bs=1 skip=8652 count=4 of=/tmp/insn 2>/dev/null || true
+printf '\001\000\200\122' > /tmp/slot0
+printf '\041\000\200\122' > /tmp/slot1
+if cmp -s /tmp/insn /tmp/slot0; then
+    dd if=/tmp/slot1 of="$BIN" bs=1 seek=8652 conv=notrunc 2>/dev/null
+    log "dynparts metadata slot set to 1"
+else
+    log "dynparts instruction not patched"
+fi
+
+# The generic config asks LXC for a 32-bit personality. Halium init is aarch64.
+sed -i 's/^lxc.arch = armhf$/lxc.arch = arm64/' /newroot/var/lib/lxc/android/config
+CFG=/newroot/var/lib/lxc/android/config
+if ! grep -q '^lxc.log.file' "$CFG"; then
+    echo 'lxc.log.file = /var/log/lxc-android.log' >> "$CFG"
+    echo 'lxc.log.level = DEBUG' >> "$CFG"
+fi
+
+# android-rootfs.img is mounted on the container root, so the SELinux stub
+# lives there. The packaged unit looks for it under /android/system.
+mkdir -p /newroot/usr/local/sbin \
+    /newroot/etc/systemd/system/android-mount.service.d
+cat > /newroot/usr/local/sbin/stone-bind-system.sh << 'EOF'
+#!/bin/sh
+src=/var/lib/lxc/android/rootfs/system
+if [ -d "$src/lib64" ]; then
+    mount --bind "$src" /android/system
+fi
+exit 0
+EOF
+chmod 755 /newroot/usr/local/sbin/stone-bind-system.sh
+cp /stone-wrap-hals.sh /newroot/usr/local/sbin/stone-wrap-hals.sh
+chmod 755 /newroot/usr/local/sbin/stone-wrap-hals.sh
+cp /stone-lxc-start.sh /newroot/usr/local/sbin/stone-lxc-start.sh
+chmod 755 /newroot/usr/local/sbin/stone-lxc-start.sh
+sed -i 's|^ExecStartPre=/usr/bin/lxc-start -d -n android$|ExecStartPre=/usr/local/sbin/stone-lxc-start.sh|' \
+    /newroot/etc/systemd/system/lxc@android.service.stone-orig
+PRE=/newroot/var/lib/lxc/android/pre-start.sh
+if ! grep -q stone-prestart "$PRE"; then
+    sed '1d' "$PRE" > "$PRE.body"
+    cat > "$PRE" << 'EOF'
+#!/bin/sh
+exec >> /var/log/stone-prestart.txt 2>&1
+echo stone-prestart
+set -x
+EOF
+    cat "$PRE.body" >> "$PRE"
+    rm -f "$PRE.body"
+    chmod 755 "$PRE"
+fi
+cp /stone-binder-nodes /newroot/usr/local/sbin/stone-binder-nodes
+chmod 755 /newroot/usr/local/sbin/stone-binder-nodes
+cat > /newroot/etc/systemd/system/android-mount.service.d/20-stone.conf << 'EOF'
+[Service]
+ExecStart=/usr/local/sbin/stone-bind-system.sh
+ExecStart=/usr/local/sbin/stone-wrap-hals.sh
+EOF
+
+# vndservicemanager exits immediately unless /dev/vndbinder exists. The
+# container's /dev is a fresh tmpfs, so create the binderfs nodes and also
+# bind the host devices when they are present.
+if ! grep -q 'dev/vndbinder' /newroot/var/lib/lxc/android/config; then
+    cat >> /newroot/var/lib/lxc/android/config << 'EOF'
+lxc.mount.entry = /dev/binder dev/binder none bind,create=file,optional 0 0
+lxc.mount.entry = /dev/hwbinder dev/hwbinder none bind,create=file,optional 0 0
+lxc.mount.entry = /dev/vndbinder dev/vndbinder none bind,create=file,optional 0 0
+EOF
+fi
+if ! grep -q stone-binder-nodes /newroot/var/lib/lxc/android/pre-start.sh; then
+    cat >> /newroot/var/lib/lxc/android/pre-start.sh << 'EOF'
+
+if [ ! -d /dev/binderfs ]; then
+    mkdir -p /dev/binderfs
+    mount -t binder binder /dev/binderfs -o stats=global || true
+fi
+if [ -x /usr/local/sbin/stone-binder-nodes ]; then
+    /usr/local/sbin/stone-binder-nodes
+fi
+for node in binder hwbinder vndbinder; do
+    if [ -e "/dev/binderfs/$node" ]; then
+        chmod 666 "/dev/binderfs/$node" || true
+        ln -sfn "/dev/binderfs/$node" "/dev/$node" || true
+    fi
+done
+EOF
+fi
+
+# Halium's linkerconfig aborts because SANITIZER_DEFAULT_VENDOR is unset, so
+# vendor processes (including the display composer) never get a linker
+# namespace and exit immediately. Write a permissive config instead.
+mknod /dev/loop1 b 7 1 2>/dev/null || true
+mkdir -p /androidimg
+if losetup /dev/loop1 /newroot/var/lib/lxc/android/android-rootfs.img \
+    && mount -t ext4 -o rw /dev/loop1 /androidimg; then
+    : > /androidimg/system/etc/public.libraries.txt
+    # /init is not under any dir.* prefix. A config without [default] makes
+    # the linker abort it, and the container never reaches RUNNING.
+    rm -f /androidimg/linkerconfig/ld.config.txt
+    # Keep the stub out of /system/lib64. /init is linked before linkerconfig
+    # runs, and this file is only needed by vendor processes.
+    rm -f /androidimg/system/lib64/libapexsupport.so
+    BIN=/androidimg/system/bin/bootstrap/linkerconfig
+    magic=$(dd if="$BIN" bs=2 count=1 2>/dev/null || true)
+    if [ "$magic" != "#!" ]; then
+        mv "$BIN" "$BIN.real"
+    fi
+    cat > "$BIN" << 'EOF'
+#!/system/bin/sh
+target=/linkerconfig
+prev=
+for arg in "$@"; do
+    if [ "$prev" = "--target" ]; then
+        target=$arg
+    fi
+    prev=$arg
+done
+mkdir -p "$target" /linkerconfig
+cat > "$target/ld.config.txt" << 'END'
+dir.system = /system/bin/
+dir.vendor = /vendor/bin/
+dir.vendor = /vendor/bin/hw/
+dir.vendor = /vendor_real/bin/
+dir.vendor = /vendor_real/bin/hw/
+dir.unrestricted = /data/
+
+[system]
+additional.namespaces = vendor
+namespace.default.isolated = false
+namespace.default.search.paths = /system/${LIB}:/system/${LIB}/hw
+namespace.vendor.isolated = false
+namespace.vendor.search.paths = /vendor_real/${LIB}:/vendor/${LIB}:/vendor/${LIB}/hw:/vendor/${LIB}/egl:/system/${LIB}
+
+[vendor]
+namespace.default.isolated = false
+namespace.default.search.paths = /vendor_real/${LIB}:/vendor/${LIB}:/vendor/${LIB}/hw:/vendor/${LIB}/egl:/system/${LIB}:/system/${LIB}/hw
+
+[unrestricted]
+namespace.default.isolated = false
+namespace.default.search.paths = /vendor/${LIB}:/system/${LIB}
+
+[default]
+namespace.default.isolated = false
+namespace.default.search.paths = /system/${LIB}:/system/${LIB}/hw
+END
+cp "$target/ld.config.txt" /linkerconfig/ld.config.txt
+exit 0
+EOF
+    chmod 755 "$BIN"
+    ln -sfn bootstrap/linkerconfig /androidimg/system/bin/linkerconfig
+    sync
+    umount /androidimg || log "umount android image failed"
+    losetup -d /dev/loop1 || true
+    log "linkerconfig replaced"
+else
+    log "android image not mounted"
+fi
+
+# USB network (NCM) for SSH from the PC. The PC side is the 02:00:5e:10:15:19
+# interface; the phone is 10.15.19.82. udev may rename the interface, so it
+# is looked up by MAC.
+cat > /newroot/usr/local/sbin/stone-usbnet.sh << 'EOF'
+#!/bin/sh
+DEV_MAC=02:00:5e:10:15:82
+HOST_MAC=02:00:5e:10:15:19
+CFG=/sys/kernel/config
+mountpoint -q "$CFG" || mount -t configfs none "$CFG"
+G=$CFG/usb_gadget/stone
+if [ ! -d "$G" ]; then
+    mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/ncm.usb0"
+    echo 0x1d6b > "$G/idVendor"
+    echo 0x0104 > "$G/idProduct"
+    echo stone > "$G/strings/0x409/serialnumber"
+    echo Xiaomi > "$G/strings/0x409/manufacturer"
+    echo "Redmi Note 12 5G Droidian" > "$G/strings/0x409/product"
+    echo NCM > "$G/configs/c.1/strings/0x409/configuration"
+    echo "$HOST_MAC" > "$G/functions/ncm.usb0/host_addr"
+    echo "$DEV_MAC" > "$G/functions/ncm.usb0/dev_addr"
+    ln -s "$G/functions/ncm.usb0" "$G/configs/c.1/"
+fi
+i=0
+while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ "$i" -lt 30 ]; do
+    sleep 1; i=$((i + 1))
+done
+UDC=$(ls /sys/class/udc | head -n 1)
+[ -n "$(cat "$G/UDC")" ] || echo "$UDC" > "$G/UDC"
+echo "stone-usbnet: bound to $UDC"
+udevadm settle -t 10 || true
+for n in /sys/class/net/*; do
+    if [ "$(cat "$n/address")" = "$DEV_MAC" ]; then
+        IF=${n##*/}
+    fi
+done
+[ -n "$IF" ] || { echo "stone-usbnet: no interface with $DEV_MAC"; exit 1; }
+ip addr replace 10.15.19.82/24 dev "$IF"
+ip link set "$IF" up
+echo "stone-usbnet: $IF up at 10.15.19.82"
+EOF
+chmod 755 /newroot/usr/local/sbin/stone-usbnet.sh
+cat > "$S/stone-usbnet.service" << 'EOF'
+[Unit]
+Description=USB network for SSH from the PC
+After=systemd-udevd.service sys-kernel-config.mount
+Before=ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/stone-usbnet.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+mkdir -p "$S/multi-user.target.wants" /newroot/etc/NetworkManager/conf.d
+ln -sfn /etc/systemd/system/stone-usbnet.service "$S/multi-user.target.wants/stone-usbnet.service"
+cat > /newroot/etc/NetworkManager/conf.d/99-stone-usb.conf << 'EOF'
+[device-stone-usb]
+match-device=mac:02:00:5e:10:15:82
+managed=0
+EOF
+
+if [ ! -x /newroot/usr/sbin/sshd ]; then
+    mkdir -p /newroot/etc/ssh /newroot/tmp/stone-debs
+    cp /stone-ssh/hostkeys/ssh_host_* /newroot/etc/ssh/
+    chmod 600 /newroot/etc/ssh/ssh_host_*_key
+    chmod 644 /newroot/etc/ssh/ssh_host_*_key.pub
+    cp /stone-ssh/debs/*.deb /newroot/tmp/stone-debs/
+    printf '#!/bin/sh\nexit 101\n' > /newroot/usr/sbin/policy-rc.d
+    chmod 755 /newroot/usr/sbin/policy-rc.d
+    mount -o bind /proc /newroot/proc
+    mount -o bind /sys /newroot/sys
+    mount -o bind /dev /newroot/dev
+    chroot /newroot /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        DEBIAN_FRONTEND=noninteractive HOME=/root \
+        /bin/sh -c 'dpkg --force-confdef --force-confold -i /tmp/stone-debs/*.deb' \
+        > /newroot/var/log/stone-dpkg.log 2>&1
+    log "dpkg exit $?"
+    umount /newroot/dev
+    umount /newroot/sys
+    umount /newroot/proc
+    rm -f /newroot/usr/sbin/policy-rc.d
+    rm -rf /newroot/tmp/stone-debs
+fi
+mkdir -p /newroot/etc/ssh/sshd_config.d
+cat > /newroot/etc/ssh/sshd_config.d/10-stone.conf << 'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+for h in /newroot/root /newroot/home/droidian; do
+    mkdir -p "$h/.ssh"
+    cp /stone-ssh/authorized_keys "$h/.ssh/authorized_keys"
+    chmod 700 "$h/.ssh"
+    chmod 600 "$h/.ssh/authorized_keys"
+done
+chroot /newroot /bin/chown -R 32011:32011 /home/droidian/.ssh
+ln -sfn /usr/lib/systemd/system/ssh.service "$S/multi-user.target.wants/ssh.service"
+[ -x /newroot/usr/sbin/sshd ] && log "sshd installed" || log "sshd missing"
+
+sync
+umount /newroot || log "umount rootfs failed"
+umount /userdata || log "umount userdata failed"
+log "journal set persistent, rebooting to bootloader"
+/reboot-bootloader
+log "reboot syscall returned"
+exec sh

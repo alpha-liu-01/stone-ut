@@ -1,0 +1,77 @@
+#!/bin/sh
+# First init for the sunstone Droidian experiment.
+# Finds the userdata GPT partition, mounts an ext4 filesystem, then
+# loop-mounts /rootfs.img and switches into it.
+
+export PATH=/bin
+
+log() {
+    echo "stone-init: $*" > /dev/kmsg
+}
+
+fail() {
+    log "$*"
+    echo "$*"
+    exec /bin/sh
+}
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+
+log "init start"
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 50 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+[ -n "$USERDATA" ] || fail "userdata partition not found"
+[ -b "$USERDATA" ] || fail "userdata node $USERDATA missing"
+log "userdata is $USERDATA"
+
+mkdir -p /userdata
+mount -t ext4 -o rw "$USERDATA" /userdata || fail "failed to mount $USERDATA"
+[ -f /userdata/rootfs.img ] || fail "missing /userdata/rootfs.img"
+
+mknod /dev/loop0 b 7 0 2>/dev/null || true
+mkdir -p /newroot
+mount -o loop,rw /userdata/rootfs.img /newroot || fail "failed to loop-mount rootfs.img"
+log "rootfs mounted"
+
+# This rootfs has /vendor -> /android/vendor, and that target does not exist.
+# /mnt/vendor is a real directory. The mapper node is not created by this init.
+if [ -b /dev/block/mapper/vendor_b ] && [ -d /newroot/mnt/vendor ]; then
+    if mount -t ext4 -o ro /dev/block/mapper/vendor_b /newroot/mnt/vendor; then
+        log "mounted vendor_b on /mnt/vendor"
+    else
+        log "vendor_b present but mount failed"
+    fi
+else
+    log "vendor_b mapper is absent; continuing without vendor"
+fi
+
+mkdir -p /newroot/mnt/userdata
+mount --move /userdata /newroot/mnt/userdata || log "could not move userdata mount"
+mount --move /proc /newroot/proc || fail "could not move /proc"
+mount --move /sys /newroot/sys || fail "could not move /sys"
+mount --move /dev /newroot/dev || fail "could not move /dev"
+
+log "switch_root"
+exec switch_root /newroot /sbin/init

@@ -1,0 +1,153 @@
+#!/bin/sh
+# One-shot boot: read the previous Droidian boot's logs and send them
+# out over a USB serial gadget. Does not switch_root and does not format.
+
+export PATH=/bin
+
+log() {
+    echo "stone-log: $*" > /dev/kmsg
+}
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /tmp /userdata /mnt/pstore /newroot
+mount -t devpts devpts /dev/pts
+
+log "log init start"
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 50 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+
+if [ -n "$USERDATA" ] && mount -t ext4 -o rw "$USERDATA" /userdata; then
+    log "mounted $USERDATA"
+    mkdir -p /userdata/stone-logs/pstore
+else
+    log "userdata mount failed"
+    USERDATA=""
+fi
+
+if mount -t pstore pstore /mnt/pstore; then
+    log "pstore mounted"
+    if [ -n "$USERDATA" ]; then
+        cp -a /mnt/pstore/. /userdata/stone-logs/pstore/ 2>/dev/null || true
+    fi
+else
+    log "pstore mount failed"
+fi
+
+if [ -n "$USERDATA" ] && [ -f /userdata/rootfs.img ]; then
+    mknod /dev/loop0 b 7 0 2>/dev/null || true
+    if mount -o loop,ro /userdata/rootfs.img /newroot; then
+        log "rootfs mounted read-only"
+        mkdir -p /newroot/proc /newroot/sys /newroot/dev
+        mount --bind /proc /newroot/proc
+        mount --bind /sys /newroot/sys
+        mount --bind /dev /newroot/dev
+        chroot /newroot /usr/bin/journalctl --no-pager --all -o short-iso \
+            > /userdata/stone-logs/journal.txt 2> /userdata/stone-logs/journal.err \
+            || log "journalctl failed"
+        umount /newroot/dev /newroot/sys /newroot/proc 2>/dev/null || true
+    else
+        log "rootfs loop mount failed"
+    fi
+fi
+
+LOGDUMP=$(part_dev logdump || true)
+if [ -n "$LOGDUMP" ] && [ -n "$USERDATA" ]; then
+    dd if="$LOGDUMP" of=/tmp/logdump.bin bs=1048576 count=32 2>/dev/null || true
+    strings /tmp/logdump.bin > /userdata/stone-logs/logdump.txt 2>/dev/null || true
+fi
+
+dmesg > /tmp/dmesg-this-boot.txt 2>/dev/null || true
+if [ -n "$USERDATA" ]; then
+    cp /tmp/dmesg-this-boot.txt /userdata/stone-logs/dmesg-this-boot.txt 2>/dev/null || true
+    sync
+    log "logs stored under /userdata/stone-logs"
+fi
+
+if ! mount -t configfs none /config 2>/dev/null; then
+    mkdir -p /config
+    mount -t configfs none /config || log "configfs mount failed"
+fi
+
+G=/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/acm.GS0"
+echo 0x0525 > "$G/idVendor"
+echo 0xa4a7 > "$G/idProduct"
+echo 0x0100 > "$G/bcdDevice"
+echo 0x0200 > "$G/bcdUSB"
+echo stone-ut > "$G/strings/0x409/manufacturer"
+echo boot-log > "$G/strings/0x409/product"
+echo stone > "$G/strings/0x409/serialnumber"
+echo logs > "$G/configs/c.1/strings/0x409/configuration"
+echo 120 > "$G/configs/c.1/MaxPower"
+ln -s "$G/functions/acm.GS0" "$G/configs/c.1/" 2>/dev/null || true
+UDC=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+if [ -n "$UDC" ]; then
+    echo "$UDC" > "$G/UDC" && log "gadget bound to $UDC" || log "UDC bind failed"
+else
+    log "no UDC"
+fi
+
+i=0
+while [ ! -c /dev/ttyGS0 ]; do
+    i=$((i + 1))
+    [ "$i" -gt 50 ] && break
+    sleep 0.1
+done
+
+if [ ! -c /dev/ttyGS0 ]; then
+    log "ttyGS0 missing"
+    exec sh
+fi
+
+log "streaming logs on ttyGS0"
+while true; do
+    {
+        echo "===== STONE-LOG-BEGIN ====="
+        echo "===== PSTORE ====="
+        for f in /mnt/pstore/*; do
+            [ -f "$f" ] || continue
+            echo "----- $f -----"
+            cat "$f"
+        done
+        echo "===== JOURNAL ====="
+        if [ -f /userdata/stone-logs/journal.txt ]; then
+            cat /userdata/stone-logs/journal.txt
+        else
+            echo "no journal.txt"
+        fi
+        echo "===== JOURNAL ERR ====="
+        if [ -f /userdata/stone-logs/journal.err ]; then
+            cat /userdata/stone-logs/journal.err
+        fi
+        echo "===== LOGDUMP STRINGS ====="
+        if [ -f /userdata/stone-logs/logdump.txt ]; then
+            cat /userdata/stone-logs/logdump.txt
+        else
+            echo "no logdump.txt"
+        fi
+        echo "===== DMESG THIS BOOT ====="
+        cat /tmp/dmesg-this-boot.txt 2>/dev/null || true
+        echo "===== STONE-LOG-END ====="
+    } > /dev/ttyGS0 2>/dev/null || true
+    sleep 3
+done
