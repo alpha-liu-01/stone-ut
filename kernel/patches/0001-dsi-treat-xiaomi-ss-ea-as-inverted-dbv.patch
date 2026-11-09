@@ -1,0 +1,17 @@
+diff --git a/techpack/display/msm/dsi/dsi_panel.c b/techpack/display/msm/dsi/dsi_panel.c
+index 698cc92b5..d95a7ab17 100644
+--- a/techpack/display/msm/dsi/dsi_panel.c
++++ b/techpack/display/msm/dsi/dsi_panel.c
+@@ -2479,8 +2479,11 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
+ 		panel->bl_config.brightness_max_level = val;
+ 	}
+ 
++	/* Xiaomi DTs mark big-endian DCS brightness with ss-ea instead */
+ 	panel->bl_config.bl_inverted_dbv = utils->read_bool(utils->data,
+-		"qcom,mdss-dsi-bl-inverted-dbv");
++		"qcom,mdss-dsi-bl-inverted-dbv") ||
++		utils->read_bool(utils->data,
++		"qcom,mdss-dsi-bl-dcs-type-ss-ea");
+ 
+ 	state = utils->get_property(utils->data, "qcom,bl-dsc-cmd-state", NULL);
+ 	if (!state || !strcmp(state, "dsi_hs_mode"))

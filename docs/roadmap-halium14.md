@@ -108,6 +108,8 @@
 
 2026-11-09 编完，没有刷入。输出在 `kernel/build-14/`，不进 git，也没有覆盖 `kernel/build/` 里上一篇的 16.0 产物。
 
+源码差异和配置差异分开记，内核树继续留在 gitignore 里。配置是 `kernel/config/halium-sunstone.fragment`。源码相对 `crdroidandroid/android_kernel_xiaomi_sm6375` 的 `14.0`、提交 `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`，补丁在 `kernel/patches/`。浅克隆之后、展开 defconfig 之前，在内核目录执行 `git apply`，路径按克隆位置换成仓库里的 `kernel/patches/*.patch`。`git apply` 能直接吃这些文件。
+
 工具链是 Ubuntu clang 21.1.8、`third_party/toolchain` 的 gcc 13.3.0 nolibc、`ld.lld`。`moonstone_defconfig` 里 `CONFIG_SYSVIPC`、`CONFIG_PID_NS`、`CONFIG_USER_NS`、`CONFIG_VT`、`CONFIG_DEVTMPFS`、`CONFIG_FHANDLE` 原本是关闭的，合并 `kernel/config/halium-sunstone.fragment` 之后这几项和 `CONFIG_IPC_NS`、`CONFIG_VT_CONSOLE`、`CONFIG_DEVTMPFS_MOUNT` 都是 y。第一次在仓库根目录跑 `merge_config.sh` 时，它在错误的目录里找 `alldefconfig`；改到内核树里重跑后写进了 `.config`。
 
 clang 21 在 16.0 那棵树上会把 qcacld 的枚举转换当成错误。这次从一开始就加了 `KCFLAGS=-Wno-implicit-enum-enum-cast`。链接只有栈帧大小警告，以及 `embms_tm_multicast_recv`、`ope_soc_info` 两个 static `EXPORT_SYMBOL` 警告。`Image` 生成。
@@ -208,3 +210,4 @@ payload 里还有 `odm`、`product`、`system`、`system_ext`、`vendor`、`vbme
 - `#4` 内核 SHA256 `7fcc1d7a0e5661972ff5c702fb79c69d271b2b7bc5fe995c4e1a620a34820bfe`，写入 `boot_b`。删掉了 `peak_refresh_rate` 和 `min_refresh_rate`，`screen_off_timeout` 恢复 30000。用户解锁、滑动、开应用、拖亮度条、电源键开关屏，屏幕都稳定，亮度条平滑。显示问题解决。
 - 回头清理之前的尝试。`#2` 去掉第一帧 `PANEL_DEAD` 是误判：开机动画后黑屏同样是亮度字节序，Android 正是在那时写入 544。crDroid 16 内核保留这段，所以 `sde_encoder.c` 用 `git checkout` 恢复成上游原样。内核树相对 `42e99ef7` 只剩 `dsi_panel.c` 的 `ss-ea` 修正。手机上执行 `svc power stayon false`（`stay_on_while_plugged_in` 回到 0），`screen_off_timeout` 回到 30000。`peak_refresh_rate` 是 crDroid 默认的 `Infinity`。
 - `#5` 内核 SHA256 `756be6253b146699794ef892762426107b502aca570c5003611e7c66c8c6fb98`，写入 `boot_b`。开机 11.9 秒报一次 `PANEL_DEAD`，是那段补丁的预期行为，随后 `mState=ON`。用户确认显示和 `#4` 一样稳定。
+- 亮度字节序的修改不进被忽略的内核树。导出为 `kernel/patches/0001-dsi-treat-xiaomi-ss-ea-as-inverted-dbv.patch`，基线就是上面的 `42e99ef7`。在干净树上 `git apply` 复核过，打完和现在 `third_party/android_kernel_xiaomi_sm6375/` 里的 `dsi_panel.c` 一致。
