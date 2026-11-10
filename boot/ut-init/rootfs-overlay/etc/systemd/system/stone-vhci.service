@@ -1,0 +1,9 @@
+[Unit]
+Description=Load the virtual HCI device for bluebinder
+ConditionPathExists=/lib/modules/stone/hci_vhci.ko
+[Service]
+Type=oneshot
+ExecStart=/sbin/insmod /lib/modules/stone/hci_vhci.ko
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

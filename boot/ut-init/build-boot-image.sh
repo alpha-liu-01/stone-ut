@@ -38,6 +38,14 @@ chmod 755 "$STAGE/root/init"
 cp "$ROOT/boot/ut-init/stone-dynparts.py" "$STAGE/root/stone-dynparts.py"
 cp "$ROOT/boot/ut-init/stone-vendor-fixups.py" "$STAGE/root/stone-vendor-fixups.py"
 cp -R "$ROOT/boot/ut-init/rootfs-overlay" "$STAGE/root/stone-rootfs"
+# Built against this kernel. The vendor copy's vermagic does not match.
+VHCI="$ROOT/kernel/build-14/drivers/bluetooth/hci_vhci.ko"
+if [ -f "$VHCI" ]; then
+    # /lib on the rootfs is a symlink to usr/lib. Copying a lib/
+    # directory onto that symlink does not create the module.
+    mkdir -p "$STAGE/root/stone-rootfs/usr/lib/modules/stone"
+    cp "$VHCI" "$STAGE/root/stone-rootfs/usr/lib/modules/stone/hci_vhci.ko"
+fi
 # Key for the usb-moded rescue sshd (10.15.19.82:8022); kept out of the repo.
 SSH_PUBKEY=${SSH_PUBKEY:-"$HOME/.ssh/id_ed25519.pub"}
 if [ -f "$SSH_PUBKEY" ]; then

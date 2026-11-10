@@ -1,0 +1,9 @@
+[Unit]
+Description=Turn on the built-in qcacld driver
+After=lxc-android-config.service
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/stone/wlan-on.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
