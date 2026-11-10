@@ -1,0 +1,5 @@
+# The built-in card is loaded explicitly by /etc/pulse/stone-touch.pa with the
+# UCM profile and the no-rewind PCM. Keep module-udev-detect from opening a
+# second card on the same device (with ALSA_CONFIG_UCM2 set it would find
+# the same profile).
+SUBSYSTEM=="sound", KERNEL=="card*", ATTR{id}=="holiqrdsku1sndc", ENV{PULSE_IGNORE}="1"

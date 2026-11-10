@@ -69,6 +69,19 @@ else
     echo "error: $MEDIA_HUB_SRC missing; media-hub drop-in would point at nothing" >&2
     exit 1
 fi
+# telephony-service only knows the droid card's port names; ship the copy
+# that matches the UCM ports, started by usr/lib/stone/telephony-service-handler.sh.
+TELEPHONY_SRC=${TELEPHONY_SRC:-"$OUT/rootfs-tree/usr/bin/lomiri-telephony-service-handler"}
+if [ -f "$TELEPHONY_SRC" ]; then
+    # Must be in /usr/bin (see usr/lib/stone/telephony-service-handler.sh).
+    mkdir -p "$STAGE/root/stone-rootfs/usr/bin"
+    python3 -I "$ROOT/tools/patch-telephony-ports.py" "$TELEPHONY_SRC" \
+        "$STAGE/root/stone-rootfs/usr/bin/lomiri-telephony-service-handler-stone"
+    chmod 755 "$STAGE/root/stone-rootfs/usr/bin/lomiri-telephony-service-handler-stone"
+else
+    echo "error: $TELEPHONY_SRC missing; telephony handler drop-in would point at nothing" >&2
+    exit 1
+fi
 # Key for the usb-moded rescue sshd (10.15.19.82:8022); kept out of the repo.
 SSH_PUBKEY=${SSH_PUBKEY:-"$HOME/.ssh/id_ed25519.pub"}
 if [ -f "$SSH_PUBKEY" ]; then

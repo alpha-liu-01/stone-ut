@@ -1,13 +1,13 @@
 [Unit]
-Description=Route voice call audio (VoiceMMode1) while ofono has a call
-# Started with PulseAudio, but not PartOf it: the watcher drives ALSA
-# directly, and a PulseAudio restart mid-call must not run
-# "call-audio.sh off" and cut the call audio.
+Description=Voice call audio session, following the PulseAudio call route
+# Started with PulseAudio, but not PartOf it: a PulseAudio restart mid-call
+# must not run "call-audio.sh off" and cut the call audio.
 After=pulseaudio.service
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/stone/call-audio-watch.sh
+Environment=ALSA_CONFIG_UCM2=/usr/share/stone/ucm2
+ExecStart=/usr/lib/stone/call-audio-router.py
 ExecStopPost=/usr/lib/stone/call-audio.sh off
 Restart=on-failure
 RestartSec=2

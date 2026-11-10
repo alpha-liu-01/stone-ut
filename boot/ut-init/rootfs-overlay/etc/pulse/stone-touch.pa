@@ -46,8 +46,8 @@ load-module module-null-source source_name=source.fake.sco rate=8000 channels=1
 ### audio.primary.default.so (the real HAL is 32-bit), so its sinks and
 ### source go nowhere. Worse, lomiri-telephony-service finds its "voicecall"
 ### profile and switches to it at the start of every call, and that switch
-### aborts PulseAudio (pa_source_assert_ref). Playback is sink.speaker below,
-### call audio is stone-call-audio.service.
+### aborts PulseAudio (pa_source_assert_ref). Playback and the call route
+### ports are the UCM card below, the voice session is stone-call-audio.service.
 #.ifexists module-droid-discover.so
 #load-module module-droid-card-28 voice_virtual_stream=true config=/usr/share/stone/audio_policy_configuration.xml
 #.endif
@@ -143,14 +143,21 @@ load-module module-dbus-protocol
 load-module module-filter-heuristics
 load-module module-filter-apply
 
-### Speaker. The Droid card (disabled above) talked to the 64-bit stub HAL,
-### which accepts writes and does not reach the amp. MultiMedia5 is the
-### low-latency front end used by mixer_paths_qrdsku1.xml.
-### msm-pcm-q6 queues every mmap period to the DSP at start and requeues
-### each one as it plays, so rewound data never reaches the speaker.
-### rewind_safeguard equals the whole 40 ms buffer, so Pulse never rewinds.
-### Copy mode (mmap=0) blocks in msm_pcm_copy and stalls the sink.
-.ifexists module-alsa-sink.so
-load-module module-alsa-sink device=hw:holiqrdsku1sndc,9 sink_name=sink.speaker channels=2 rate=48000 tsched=0 fragments=4 fragment_size=1920 rewind_safeguard=7680 sink_properties="device.description=Speaker"
-set-default-sink sink.speaker
-.endif
+### Built-in audio. The Droid card (disabled above) talked to the 64-bit
+### stub HAL, which accepts writes and does not reach the amp. Instead the
+### card runs the UCM profile /usr/share/stone/ucm2/stone/HiFi.conf
+### (ALSA_CONFIG_UCM2 from pulseaudio.service.d/zz-stone-audio.conf),
+### transcribed from mixer_paths_qrdsku1.xml. Its devices become the ports
+### lomiri-telephony-service switches during calls: sink.primary
+### "[Out] Speaker|Earpiece|Bluetooth", source.primary "[In] Mic|BluetoothMic".
+### Playback is MultiMedia5 through the pass-through PCM stone_mm5
+### (/etc/alsa/conf.d/50-stone.conf): msm-pcm-q6 queues every mmap period to
+### the DSP at start, so rewound data never reaches the speaker, and
+### PulseAudio does not rewind a non-hw PCM. 4x10 ms buffer as before; copy
+### mode (mmap=0) blocks in msm_pcm_copy and stalls the sink.
+### udev-detect ignores this card (71-stone-pulseaudio.rules).
+.nofail
+load-module module-alsa-card device_id=0 use_ucm=1 name=primary card_name=alsa_card.stone sink_name=sink.primary source_name=source.primary rate=48000 tsched=0 fragments=4 fragment_size=1920 sink_properties="device.description='Built-in audio'" source_properties="device.description='Built-in microphone'"
+set-default-sink sink.primary
+set-default-source source.primary
+.fail

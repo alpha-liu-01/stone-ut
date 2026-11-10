@@ -92,10 +92,21 @@ rm -rf /newroot/usr/share/halium-overlay
 for f in \
     etc/systemd/system/ofono.service.d/zz-stone-debug.conf \
     etc/systemd/user/lomiri-full-greeter.service.d/stone-core.conf \
+    usr/lib/stone/call-audio-watch.sh \
+    usr/lib/stone/speaker-route.sh \
     ; do
     rm -f "/newroot/$f"
 done
 cp -R /stone-rootfs/. /newroot/ || log "could not install rootfs overlay"
+# update-machine-info-from-deviceinfo only sets the pretty hostname when it
+# is empty. The first boot ran before devices/stone.yaml existed and stored
+# libdeviceinfo's fallback, which Bluetooth then advertises. Drop only the
+# fallback names, so a name the user picked is kept.
+MI=/newroot/etc/writable/machine-info
+if [ -f "$MI" ] && grep -q '^PRETTY_HOSTNAME="Generic \(Halium \)\{0,1\}device"$' "$MI"; then
+    sed -i '/^PRETTY_HOSTNAME="Generic \(Halium \)\{0,1\}device"$/d' "$MI"
+    log "cleared generic pretty hostname"
+fi
 # Passwordless sudo exists only while booted from the trace image.
 if [ -f /stone-sudoers ]; then
     cp /stone-sudoers /newroot/etc/sudoers.d/stone-trace

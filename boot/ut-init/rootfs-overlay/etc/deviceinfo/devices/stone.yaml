@@ -4,6 +4,6 @@
 # /dev/socket/rild; qcril serves android.hardware.radio@1.5 over hwbinder.
 stone:
   Name: stone
-  PrettyName: Xiaomi Redmi Note 12 Pro 5G
+  PrettyName: Xiaomi Redmi Note 12 5G
   DeviceType: phone
   OfonoPlugin: binder
