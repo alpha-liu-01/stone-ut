@@ -1,0 +1,129 @@
+#!/bin/sh
+# One-shot boot: try the Ubuntu Touch mount, then send the result and
+# the previous boot's pstore out over a USB serial gadget.
+
+export PATH=/bin
+
+log() {
+    echo "stone-ut-log: $*" > /dev/kmsg
+}
+
+mkdir -p /proc /sys /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /tmp /userdata /mnt/pstore /config
+mount -t devpts devpts /dev/pts
+
+log "log init start"
+echo "log init start" > /tmp/report.txt
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 50 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+
+if [ -n "$USERDATA" ]; then
+    echo "userdata node $USERDATA" >> /tmp/report.txt
+    log "userdata node $USERDATA"
+else
+    echo "userdata node missing" >> /tmp/report.txt
+    log "userdata node missing"
+fi
+
+if [ -n "$USERDATA" ] && mount -t ext4 -o ro "$USERDATA" /userdata; then
+    echo "ext4 mount ok" >> /tmp/report.txt
+    log "ext4 mount ok"
+    if [ -x /userdata/sbin/init ]; then
+        echo "sbin/init executable" >> /tmp/report.txt
+    else
+        echo "sbin/init not executable" >> /tmp/report.txt
+    fi
+    if [ -f /userdata/usr/lib/os-release ]; then
+        echo "----- os-release -----" >> /tmp/report.txt
+        cat /userdata/usr/lib/os-release >> /tmp/report.txt
+    else
+        echo "os-release missing" >> /tmp/report.txt
+    fi
+    echo "----- /var/log -----" >> /tmp/report.txt
+    ls /userdata/var/log >> /tmp/report.txt 2>&1 || true
+    echo "----- journal -----" >> /tmp/report.txt
+    ls /userdata/var/log/journal >> /tmp/report.txt 2>&1 || true
+else
+    echo "ext4 mount failed" >> /tmp/report.txt
+    log "ext4 mount failed"
+fi
+
+if mount -t pstore pstore /mnt/pstore; then
+    echo "pstore mounted" >> /tmp/report.txt
+    log "pstore mounted"
+else
+    echo "pstore mount failed" >> /tmp/report.txt
+    log "pstore mount failed"
+fi
+
+dmesg > /tmp/dmesg-this-boot.txt 2>/dev/null || true
+
+if ! mount -t configfs none /config 2>/dev/null; then
+    mount -t configfs none /config || log "configfs mount failed"
+fi
+
+G=/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/acm.GS0"
+echo 0x0525 > "$G/idVendor"
+echo 0xa4a7 > "$G/idProduct"
+echo 0x0100 > "$G/bcdDevice"
+echo 0x0200 > "$G/bcdUSB"
+echo stone-ut > "$G/strings/0x409/manufacturer"
+echo boot-log > "$G/strings/0x409/product"
+echo stone > "$G/strings/0x409/serialnumber"
+echo logs > "$G/configs/c.1/strings/0x409/configuration"
+echo 120 > "$G/configs/c.1/MaxPower"
+ln -s "$G/functions/acm.GS0" "$G/configs/c.1/" 2>/dev/null || true
+UDC=$(ls /sys/class/udc | head -n 1)
+if [ -n "$UDC" ]; then
+    echo "$UDC" > "$G/UDC" && log "gadget bound to $UDC" || log "UDC bind failed"
+else
+    log "no UDC"
+fi
+
+i=0
+while [ ! -c /dev/ttyGS0 ]; do
+    i=$((i + 1))
+    [ "$i" -gt 50 ] && break
+    sleep 0.1
+done
+
+log "streaming"
+while true; do
+    {
+        echo "===== STONE-UT-LOG-BEGIN ====="
+        echo "===== REPORT ====="
+        cat /tmp/report.txt
+        echo "===== PSTORE ====="
+        for f in /mnt/pstore/*; do
+            [ -f "$f" ] || continue
+            echo "----- $f -----"
+            cat "$f"
+        done
+        echo "===== DMESG ====="
+        cat /tmp/dmesg-this-boot.txt
+        echo "===== STONE-UT-LOG-END ====="
+    } > /dev/ttyGS0 2>/dev/null || true
+    sleep 3
+done

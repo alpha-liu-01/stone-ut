@@ -1,0 +1,127 @@
+#!/bin/sh
+# First init for the sunstone Ubuntu Touch image.
+# The userdata GPT partition is the Ubuntu root filesystem itself.
+# jumpercable (/init in that rootfs) expects a second userdata partition,
+# so this init enters /sbin/init directly.
+# The Android 14 vendor ramdisk has no /proc, /sys or /dev, so this
+# ramdisk carries its own mount points.
+
+export PATH=/bin
+
+mkdir -p /proc /sys /dev /tmp /config /newroot
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+
+log() {
+    echo "stone-ut-init: $*" > /dev/kmsg
+    echo "$*" >> /tmp/report.txt
+}
+
+# No console and no fbcon: a failure is only visible over USB.
+fail() {
+    log "FAIL: $*"
+    mount -t configfs none /config 2>/dev/null
+    G=/config/usb_gadget/g1
+    mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/acm.GS0"
+    echo 0x0525 > "$G/idVendor"
+    echo 0xa4a7 > "$G/idProduct"
+    echo stone-ut > "$G/strings/0x409/manufacturer"
+    echo boot-fail > "$G/strings/0x409/product"
+    echo stone > "$G/strings/0x409/serialnumber"
+    echo fail > "$G/configs/c.1/strings/0x409/configuration"
+    ln -s "$G/functions/acm.GS0" "$G/configs/c.1/" 2>/dev/null
+    i=0
+    while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ "$i" -lt 300 ]; do
+        i=$((i + 1))
+        sleep 0.1
+    done
+    ls /sys/class/udc 2>/dev/null | head -n 1 > "$G/UDC"
+    while true; do
+        {
+            echo "===== STONE-UT-FAIL-BEGIN ====="
+            cat /tmp/report.txt
+            echo "===== DMESG ====="
+            dmesg
+            echo "===== STONE-UT-FAIL-END ====="
+        } > /dev/ttyGS0 2>/dev/null
+        sleep 3
+    done
+}
+
+log "init start"
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 100 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+[ -n "$USERDATA" ] || fail "userdata partition not found"
+[ -b "$USERDATA" ] || fail "userdata node $USERDATA missing"
+log "userdata is $USERDATA"
+
+mount -t ext4 -o rw "$USERDATA" /newroot || fail "failed to mount $USERDATA"
+[ -x /newroot/sbin/init ] || fail "missing /sbin/init"
+[ -f /newroot/var/lib/lxc/android/android-rootfs.img ] || log "android-rootfs.img is absent"
+
+dmesg > /newroot/stone-initramfs-dmesg.txt 2>/dev/null
+cp /tmp/report.txt /newroot/stone-initramfs-report.txt 2>/dev/null
+
+# Device files for the rootfs (Halium overlay and the like), refreshed on every
+# boot from boot/ut-init/rootfs-overlay. The Ubuntu Touch image ships no
+# /usr/share/halium-overlay of its own.
+rm -rf /newroot/usr/share/halium-overlay
+cp -R /stone-rootfs/. /newroot/ || log "could not install rootfs overlay"
+# Passwordless sudo exists only while booted from the trace image.
+if [ -f /stone-sudoers ]; then
+    cp /stone-sudoers /newroot/etc/sudoers.d/stone-trace
+    chmod 440 /newroot/etc/sudoers.d/stone-trace
+else
+    rm -f /newroot/etc/sudoers.d/stone-trace
+fi
+
+NEXT_INIT=/sbin/init
+if [ -f /stone-init-wrapper ]; then
+    rm -rf /newroot/stone-logs/live
+    mkdir -p /newroot/stone
+    cp /bin/busybox /newroot/stone/busybox
+    cp /stone-init-wrapper /newroot/stone/init-wrapper
+    cp /reboot-bootloader /newroot/stone/reboot-bootloader
+    chmod 755 /newroot/stone/busybox /newroot/stone/init-wrapper \
+        /newroot/stone/reboot-bootloader
+    NEXT_INIT=/stone/init-wrapper
+fi
+
+mount --move /proc /newroot/proc || fail "could not move /proc"
+mount --move /sys /newroot/sys || fail "could not move /sys"
+mount --move /dev /newroot/dev || fail "could not move /dev"
+
+# vendor and odm live in super. Halium's mount-android-partitions finds
+# them as /dev/mapper/<name>_b, which nothing else creates before udev.
+mkdir -p /newroot/stone
+cp /stone-dynparts.py /newroot/stone/dynparts.py
+chroot /newroot /usr/bin/python3 /stone/dynparts.py \
+    > /newroot/stone-dynparts.txt 2>&1
+cp /stone-vendor-fixups.py /newroot/stone/vendor-fixups.py
+chroot /newroot /usr/bin/python3 /stone/vendor-fixups.py \
+    > /newroot/stone-vendor-fixups.txt 2>&1
+sync
+
+log "switch_root to $NEXT_INIT"
+exec switch_root /newroot "$NEXT_INIT"

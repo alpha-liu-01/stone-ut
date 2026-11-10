@@ -1,0 +1,46 @@
+#!/stone/busybox sh
+# Runs as PID 1 in the Ubuntu Touch root, starts a log snapshot loop,
+# then becomes systemd. Snapshots land in /stone-logs/live: every 3 s for
+# the first three minutes, then every 30 s. After 20 minutes the loop
+# reboots into the bootloader.
+
+B=/stone/busybox
+L=/stone-logs/live
+
+snap() {
+    if $B grep -q '^[^ ]* / [^ ]* ro[, ]' /proc/mounts; then
+        $B mount -o remount,rw / 2>/dev/null
+    fi
+    $B mkdir -p "$L"
+    $B cat /proc/uptime > "$L/uptime.txt"
+    $B dmesg > "$L/dmesg.txt" 2>&1
+    $B ps -o pid,ppid,stat,time,args > "$L/ps.txt" 2>&1 || $B ps > "$L/ps.txt" 2>&1
+    $B cat /proc/mounts > "$L/mounts.txt"
+    $B timeout 5 /usr/bin/systemctl list-jobs --no-pager > "$L/jobs.txt" 2>&1
+    $B timeout 5 /usr/bin/systemctl --failed --no-pager > "$L/failed.txt" 2>&1
+    $B timeout 10 /usr/bin/journalctl -b --no-pager -o short-monotonic > "$L/journal.txt" 2>&1
+    $B ls -l /dev/mapper > "$L/mapper.txt" 2>&1
+    $B timeout 5 /usr/bin/lxc-info -n android > "$L/lxc-info.txt" 2>&1
+    $B timeout 10 /usr/bin/lxc-attach -n android -- /system/bin/logcat -d -b all \
+        > "$L/logcat.txt" 2>&1
+    $B sync
+}
+
+(
+    $B sleep 2
+    i=0
+    while [ "$i" -lt 60 ]; do
+        snap
+        $B sleep 3
+        i=$((i + 1))
+    done
+    while [ "$i" -lt 94 ]; do
+        snap
+        $B sleep 30
+        i=$((i + 1))
+    done
+    snap
+    /stone/reboot-bootloader
+) < /dev/null > /dev/null 2>&1 &
+
+exec /lib/systemd/systemd "$@"

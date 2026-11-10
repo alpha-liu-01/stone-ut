@@ -1,0 +1,2 @@
+# usb-moded owns /sys/kernel/config/usb_gadget/g1 on Ubuntu Touch. The vendor
+# file builds g1/configs/b.1, and usb-moded then cannot create c.1 (EBUSY).

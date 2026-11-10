@@ -1,0 +1,103 @@
+#!/bin/sh
+# One-shot boot: let the Ubuntu Touch root replay its ext4 journal, dump
+# the systemd journal as text into /stone-logs, then export userdata
+# read-only as a USB disk. Does not switch_root and does not format.
+
+export PATH=/bin
+
+mkdir -p /proc /sys /dev /config /newroot
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+
+log() {
+    echo "stone-ut-disk: $*" > /dev/kmsg
+}
+
+part_dev() {
+    name="$1"
+    for ue in /sys/class/block/*/uevent; do
+        if grep -q "^PARTNAME=${name}$" "$ue"; then
+            devname=$(sed -n 's/^DEVNAME=//p' "$ue")
+            echo "/dev/${devname}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+i=0
+USERDATA=""
+while [ "$i" -lt 100 ]; do
+    USERDATA=$(part_dev userdata) && break
+    i=$((i + 1))
+    sleep 0.1
+done
+[ -n "$USERDATA" ] || log "userdata node missing"
+
+if [ -n "$USERDATA" ] && mount -t ext4 -o rw "$USERDATA" /newroot; then
+    log "mounted $USERDATA"
+    L=/newroot/stone-logs
+    mkdir -p "$L"
+    mount --bind /proc /newroot/proc
+    mount --bind /sys /newroot/sys
+    mount --bind /dev /newroot/dev
+    chroot /newroot /usr/bin/journalctl --no-pager --all -o short-monotonic -b -1 \
+        > "$L/journal-prev.txt" 2> "$L/journal.err" || log "journalctl -b -1 failed"
+    chroot /newroot /usr/bin/journalctl --no-pager --all -o short-monotonic \
+        > "$L/journal-all.txt" 2>> "$L/journal.err" || log "journalctl failed"
+    chroot /newroot /usr/bin/journalctl --list-boots --no-pager \
+        > "$L/boots.txt" 2>> "$L/journal.err" || true
+    umount /newroot/dev /newroot/sys /newroot/proc 2>/dev/null
+    ls -la /newroot/var/log/journal > "$L/journal-dir.txt" 2>&1
+    dmesg > "$L/dmesg-disk-boot.txt" 2>/dev/null
+    mkdir -p "$L/var-log"
+    cp -a /newroot/var/log/lightdm /newroot/var/log/syslog "$L/var-log/" 2>/dev/null
+    cp -a /newroot/var/lib/lxc/android/*.log "$L/var-log/" 2>/dev/null
+    chmod -R a+rX /newroot/stone-logs /newroot/stone-*.txt 2>/dev/null
+    sync
+    umount /newroot || log "umount userdata failed"
+else
+    log "userdata mount failed"
+fi
+
+mount -t configfs none /config || log "configfs mount failed"
+G=/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/mass_storage.0"
+echo 0x1d6b > "$G/idVendor"
+echo 0x0104 > "$G/idProduct"
+echo 0x0100 > "$G/bcdDevice"
+echo 0x0200 > "$G/bcdUSB"
+echo stone-ut > "$G/strings/0x409/manufacturer"
+echo stone-userdata > "$G/strings/0x409/product"
+echo stone > "$G/strings/0x409/serialnumber"
+echo disk > "$G/configs/c.1/strings/0x409/configuration"
+echo 120 > "$G/configs/c.1/MaxPower"
+echo 1 > "$G/functions/mass_storage.0/lun.0/ro"
+echo 0 > "$G/functions/mass_storage.0/lun.0/cdrom"
+echo 1 > "$G/functions/mass_storage.0/lun.0/removable"
+[ -n "$USERDATA" ] && echo "$USERDATA" > "$G/functions/mass_storage.0/lun.0/file"
+ln -s "$G/functions/mass_storage.0" "$G/configs/c.1/" 2>/dev/null
+
+i=0
+while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ "$i" -lt 300 ]; do
+    i=$((i + 1))
+    sleep 0.1
+done
+UDC=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+if [ -n "$UDC" ]; then
+    echo "$UDC" > "$G/UDC" && log "disk bound to $UDC" || log "UDC bind failed"
+else
+    log "no UDC"
+fi
+
+# The host ejecting the disk clears the backing file; then go to fastboot.
+LUN="$G/functions/mass_storage.0/lun.0/file"
+while [ -n "$(cat "$LUN" 2>/dev/null)" ]; do
+    sleep 2
+done
+log "disk ejected, rebooting to bootloader"
+sync
+exec /reboot-bootloader
