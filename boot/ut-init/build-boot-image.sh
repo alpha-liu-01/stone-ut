@@ -85,6 +85,23 @@ else
     echo "error: $TELEPHONY_SRC missing; telephony handler drop-in would point at nothing" >&2
     exit 1
 fi
+# camera_service hangs releasing a video recorder (AudioSystem waits forever
+# for an AudioFlinger this system does not have); the patched libaudioclient
+# is bind-mounted over the Android system's copy by mount-halium-overlay.
+ANDROID_IMG=${ANDROID_IMG:-"$OUT/rootfs-tree/var/lib/lxc/android/android-rootfs.img"}
+if [ -f "$ANDROID_IMG" ]; then
+    LAC_DIR="$STAGE/root/stone-rootfs/usr/share/halium-overlay/android/system/lib64"
+    mkdir -p "$LAC_DIR"
+    debugfs -R "dump /system/lib64/libaudioclient.so $STAGE/libaudioclient.so" \
+        "$ANDROID_IMG" 2>/dev/null
+    python3 -I "$ROOT/tools/patch-libaudioclient.py" "$STAGE/libaudioclient.so" \
+        "$LAC_DIR/libaudioclient.so"
+    chmod 644 "$LAC_DIR/libaudioclient.so"
+    rm -f "$STAGE/libaudioclient.so"
+else
+    echo "error: $ANDROID_IMG missing; video recordings would hang the camera app" >&2
+    exit 1
+fi
 # Key for the usb-moded rescue sshd (10.15.19.82:8022); kept out of the repo.
 SSH_PUBKEY=${SSH_PUBKEY:-"$HOME/.ssh/id_ed25519.pub"}
 if [ -f "$SSH_PUBKEY" ]; then

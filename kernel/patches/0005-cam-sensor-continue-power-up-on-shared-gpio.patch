@@ -1,0 +1,37 @@
+diff --git a/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c b/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c
+index c3aa37eed..29c8f3416 100644
+--- a/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c
++++ b/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c
+@@ -2066,6 +2066,10 @@ int cam_sensor_core_power_up(struct cam_sensor_power_ctrl_t *ctrl,
+ 	rc = cam_sensor_util_request_gpio_table(soc_info, 1);
+ 	if (rc < 0) {
+ 		no_gpio = rc;
++		if (rc == -EBUSY)
++			CAM_INFO(CAM_SENSOR,
++				"%s: a gpio is held by another camera device (shared), still do power up",
++				soc_info->dev_name);
+ 	}
+ 
+ 	if (ctrl->cam_pinctrl_status) {
+@@ -2155,7 +2159,20 @@ int cam_sensor_core_power_up(struct cam_sensor_power_ctrl_t *ctrl,
+ 		case SENSOR_STANDBY:
+ 		case SENSOR_CUSTOM_GPIO1:
+ 		case SENSOR_CUSTOM_GPIO2:
+-			if (no_gpio) {
++			/*
++			 * stone-ut: -EBUSY means another camera device holds
++			 * one of this table's pins. On sunstone every sensor
++			 * and the flash share TLMM 38 (CAM_VIO*, CUSTOM_GPIO1),
++			 * the DT's gpios-shared does not list it, and CamX
++			 * powers the wide and depth sensors together for
++			 * camera 0 (logical bokeh camera). The pin is already
++			 * driven by its holder, and custom_gpio1_powernum keeps
++			 * it up until the last user powers down. Xiaomi's
++			 * camera.ko continues the same way ("request gpio
++			 * failed,still do power up"); aborting here makes CamX
++			 * abort in CSLAcquireDevice and the provider restart.
++			 */
++			if (no_gpio && no_gpio != -EBUSY) {
+ 				if (power_setting->seq_type != SENSOR_CUSTOM_GPIO1) {
+ 					CAM_ERR(CAM_SENSOR, "request gpio failed");
+ 					goto power_up_failed;
