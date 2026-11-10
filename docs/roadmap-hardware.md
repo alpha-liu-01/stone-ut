@@ -1,9 +1,9 @@
 # Hardware, after the display is up
 
 
-The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is now the normal `boot-ut.img` (kernel `#7`). It has no passwordless sudo, and it does not return to fastboot by itself.
+The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is now the normal `boot-ut.img` (kernel `#9`, carrying the netd stub; a copy is at `out/halium14/boot-ut-data.img`, SHA256 `b72e43e1…`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
 
-`/etc/os-release` is Ubuntu 24.04.5 LTS. The root filesystem comes from `ubuntu-touch-android9plus-rootfs-arm64.tar.gz` on the 24.04-2.x channel. adb is up, serial `stone`. The phone clock is still in 1970. If Wi-Fi associates and certificate checks then fail, set the time first.
+`/etc/os-release` is Ubuntu 24.04.5 LTS. The root filesystem comes from `ubuntu-touch-android9plus-rootfs-arm64.tar.gz` on the 24.04-2.x channel. adb is up, serial `stone`. Once mobile data was up on 2026-11-10, the phone clock went from 1970 to the correct time.
 
 ## Already confirmed working
 
@@ -11,6 +11,9 @@ The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user 
 - Charging: `/sys/class/power_supply/battery/status` is `Charging`. The user confirmed the phone recognizes that it is charging.
 - Vibration: `/sys/class/leds/vibrator` exists, and the user confirmed it works.
 - adb.
+- Speaker output (item 3).
+- Wi-Fi (item 4).
+- SIM, both IMEIs, mobile data (5G/NR), IMS registration (item 5). Calls connect but have no audio.
 
 ## Fix order
 
@@ -84,6 +87,7 @@ RNDIS and SSH are normal. adb did not enumerate this time. On the phone only `ad
 - After the user entered fastboot, `db3ea3cf…` was written and the phone rebooted. `#8` came up, the sound card was present, `lsmod` was empty, there was no `/dev/vhci`, and there was no `wlan0`. The firmware crashed while probing the QCA6750.
 - The module path was changed to `usr/lib/modules/stone/`. The new image `c32153db…` had not been written yet.
 - The user entered fastboot again, and `c32153db…` was written. `hci_vhci` is in `lsmod`, and `/dev/vhci` exists. `wlan0` is still absent.
+- Correction from item 4: `CONFIG_CNSS_QCA6750=y` was wrong. This machine's WLAN is the Helium/Adrastea type on SNOC, not a QCA6750. That option is what made the firmware crash during probe in `#8`. It has been removed from the fragment.
 
 ## 3. Sound
 
@@ -135,6 +139,7 @@ The workaround lives in the user directory and does not need another boot image.
 - Only the first key click after a pause was normal. The cause is that the DSP does not rewind. `sink.speaker` was changed to `mmap=0`.
 - Ringtone preview crashed media-hub: the kernel cannot produce an AppArmor peer label, and the empty name triggers abort. The media-hub in the user directory treats an empty label as `unconfined`. The same preview path finished `Ubuntu.ogg`, with output on `sink.speaker`.
 - The user reported an extreme delay between key clicks, and the ringtone about a minute late. The cause is `mmap=0` leaving Pulse stuck in `msm_pcm_copy`. Switched back to mmap, a 40 ms buffer, and `rewind_safeguard` covering the whole buffer. Short tones no longer queue, and the ringtone preview starts on the speaker within about 0.85 seconds.
+- 2026-11-09: the user confirmed speaker sound works fully: key clicks, ringtone preview, and playback. The speaker part of this item is done. The earpiece, headphones, microphone, and call audio are still open.
 
 ## 4. Wi-Fi
 
@@ -150,7 +155,45 @@ What is seen: the user confirmed Wi-Fi is unavailable. There is no `wlan0`. On t
 
 ### Implementation notes
 
+2026-11-09: kernel `#9` is built, and `boot-ut.img` has been packed. It has not been written to the phone yet.
+
+`#8` had no `wlan0` because of a config option item 2 added by mistake. `CONFIG_CNSS_QCA6750=y` makes qcacld's `configs/default_defconfig` turn on `CONFIG_LITHIUM` and `ROME_IF = ipci`, which is the QCA6750 (11ax) path. This machine's WLAN is not a QCA6750. In the Android 14 dmesg captured on the host (`out/halium14/logs/`), both the stock kernel (`stock-kernel-dmesg.txt`) and our `#3` kernel (`halium-kernel-dmesg-3.txt`) use `hif_snoc_*`, which is the Helium/Adrastea SNOC path (`CONFIG_ICNSS2_HELIUM`, `PLD_SNOC_ICNSS_FLAG`). On Android 14, `#3` loaded the driver after "Wifi Turning On from UI", and `wlan0` associated (`connected to 34:98:b5:88:a8:a3`). That shows that without this option, the built-in driver, the firmware, and the vendor's cnss-daemon all work. With the IPCI path, `#8` crashed the firmware during probe (`PD service down ... FW crash`, `hif_wlan_enable` -110).
+
+`CONFIG_CNSS_QCA6750=y` was removed from `kernel/config/halium-sunstone.fragment`. The fragment was not re-expanded. The option was turned off with `scripts/config --disable CNSS_QCA6750` on `#8`'s `.config`, followed by `olddefconfig`. Compared with `#8` (with comments excluded), the only `.config` difference is that one line. The build command, run in the kernel tree:
+
+`PATH=/usr/lib/llvm-21/bin:third_party/toolchain/gcc-13.3.0-nolibc/aarch64-linux/bin:$PATH make O=kernel/build-14 ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux- KCFLAGS=-Wno-implicit-enum-enum-cast Image modules`
+
+Ubuntu only puts `clang` in `/usr/bin`, so `ld.lld`, `llvm-ar`, and `llvm-objcopy` come from `/usr/lib/llvm-21/bin`.
+
+The rest of the path on Ubuntu Touch was checked in the current `#8` session, without root:
+
+- Inside the container, `ueventd`, `cnss-daemon`, `android.hardware.wifi-service`, and `wificond` are all running.
+- Firmware requests already go through the container's ueventd on UT (`adsp.mdt`, `ipa_fws.*`). The kernel has `FW_LOADER_USER_HELPER(_FALLBACK)=y`. `/vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini` points at `/vendor/etc/wifi/WCNSS_qcom_cfg.ini`, which exists. `wlan_mac.bin` points at `/mnt/vendor/persist`, which may not be mounted in the container. In that case the driver falls back to a MAC address it generates itself.
+- `CFG80211`, `MAC80211`, and `RFKILL` are built in. Ubuntu's `wpa_supplicant` and `NetworkManager` are running. `10-globally-managed-devices.conf` keeps Wi-Fi devices managed. `nmcli radio` shows `WIFI enabled`, `WIFI-HW missing`. Nothing is soft-blocked in rfkill.
+- `stone-wlan-on.service` stays as it is. After lxc it writes `ON` to `/dev/wlan`, up to 8 times, and waits for `wlan0`.
+
+Kernel messages do not go to the journal (`_TRANSPORT=kernel` is empty), and the 256K ring buffer has wrapped after a few hours. After a boot, read `dmesg` (phablet can) soon, before it rolls over. Because the clock is in 1970, `journalctl -b` picks the wrong boot. Use `journalctl _BOOT_ID=$(cat /proc/sys/kernel/random/boot_id | tr -d -)` instead.
+
+Products:
+
+- `kernel/build-14/arch/arm64/boot/Image`, `#9 SMP PREEMPT Mon Nov 9 23:41:32 EST 2026`, 47999488 bytes, SHA256 `3a719ecdb983a41477a24b99fc471bbeba7c8d3286a7945c1181c02ed0910c31`. `System.map` has `hif_snoc_enable_bus` and `pld_snoc_register_driver`, and no `hif_ipci_*`, `pld_ipci_*`, or `hal_qca6750_attach`. `#8` is kept at `out/halium14/Image-8`.
+- `out/halium14/boot-ut.img`, header v3, ramdisk 958566 bytes. Its kernel is byte-for-byte the `#9` Image. The ramdisk carries `hci_vhci.ko` (vermagic unchanged), `stone-wlan-on.service`, and the speaker overlay. SHA256 `beeb8e43a76bc11a0384fd801f374aba16787ca798a26ea6af95bb8220675b38`. The previous `#8` image is kept at `out/halium14/boot-ut-8.img` (`c32153db…`).
+
+Manual test, after the user puts the phone into fastboot:
+
+1. `fastboot flash boot_b out/halium14/boot-ut.img`. Leave `vendor_boot`, `dtbo`, `vbmeta`, `super`, and userdata alone.
+2. `fastboot reboot`.
+3. On the phone: the Wi-Fi toggle in Settings is available, nearby networks appear, and a known network connects and gets an address.
+4. On the host: `adb shell 'ls /sys/class/net; dmesg | grep -iE "wlan|icnss|hif_" | tail -40; nmcli device; systemctl status stone-wlan-on.service'`.
+
+If `wlan0` is still absent, read dmesg first. Do not reflash in a loop. To roll back, write `out/halium14/boot-ut-8.img` to `boot_b`.
+
 ### Events
+
+- Read `dmesg` as phablet on `#8`. The ring buffer had wrapped, and no WLAN lines from boot were left. `stone-wlan-on.service` had failed: 8 `ON` writes, each an I/O error after about 25 seconds.
+- Compared the host's Android 14 dmesg with the stock kernel and with `#3`. Both use SNOC, and `#3` associated on Android. The cause is `CONFIG_CNSS_QCA6750=y` from item 2.
+- Removed the option and built `#9` incrementally. Confirmed that only the SNOC path is linked, then packed `boot-ut.img`. Nothing was flashed.
+- The user wrote `beeb8e43…` to `boot_b`. After boot, `uname` was `#9`, and `wlan0`, `wlan1`, `p2p0`, and `wifi-aware0` all exist. NetworkManager shows `wlan0` connected. The user confirmed Wi-Fi works. Kept at `out/halium14/boot-ut-9-wifi.img`.
 
 ## 5. SIM
 
@@ -164,9 +207,130 @@ What is seen: the user confirmed the SIM is not recognized at all. `ofono` is ru
 2. After a modem object exists, look at SIM state, signal, and the operator.
 3. Call audio returns to the `audiosystem-passthrough-qti` left by item 3.
 
+The user added to the goal: LTE (or NR) data and LTE calls should both work. The SIM is a Canadian Fizz card.
+
+### Current status (2026-11-10)
+
+| Item | Status |
+| --- | --- |
+| SIM, IMEI, operator | Working. ofono has `/ril_0` and `/ril_1`, and Settings can see both IMEIs. |
+| Mobile data | Working. User confirmed 5G data. Measured on NR, Fizz 302/490: IPv4 ping and HTTPS work. |
+| 3G voice calls | The call connects, but there is no audio in either direction (see "Call audio" below). |
+| IMS / VoLTE | IMS has registered (`Registered=true`, `VoiceCapable=true`, `SmsCapable=true`). A VoLTE call has not been placed yet. |
+| Call audio | Both directions work (user confirmed). The earpiece is clear. With mono mic plus unmute, the other side can hear and understand, but it drops several times a second. Now testing +14 dB uplink gain (see the Events). |
+| MMS | Working (user confirmed). The context has been changed to Fizz (`mobile.bm`, `http://mms.mobile.bm`, `mmsproxy.mobile.bm:80`). |
+
+#### Why mobile data did not work, and the fix
+
+It was not the APN, roaming, or the binder plugin. qcril's data module never initialized:
+
+1. The vendor `netmgrd` (`ro.vendor.use_data_netmgrd=true`) waits after startup for `android.system.net.netd@1.1::INetd/default` (`V1_1::INetd::getService` plus `registerForNotifications`). The log stops at `NetmgrNetdClientInit(): Looking for Netd service`.
+2. Halium runs no netd, and the Halium 14 system image has no netd stub. No netd service of any version exists on hwbinder or binder.
+3. Until netmgrd is ready, DSI (`libdsi_netctrl`) cannot finish initializing. qcril initializes DSI only once, when it starts, so it never recovers. From then on, every `setupDataCall` gets `[CallManager]: DSI init not yet completed` inside qcril and is answered immediately with `respErr=4`, `cause=4100` (`OEM_DCFAILCAUSE_4`). It never reaches the modem. `imsd` gets stuck for the same reason (`dsi_get_data_srvc handle returned NULL`), so IMS cannot register either.
+4. Side effect: `lomiri-indicator-network-service` retries immediately after every failure. That was over 10,000 times in one boot, and it stopped answering D-Bus, so Settings would not open and the Wi-Fi toggle did not take effect.
+
+Fix: `stone-netd-stub.service` runs `usr/lib/stone/netd-stub.py` (python3-gbinder) and registers a stub INetd 1.1/1.0 on `/dev/hwbinder`. Every method returns a complete HIDL reply (transport status 0, then `StatusCode::OK`). `createOemNetwork` returns a handle of `(netId<<32)|0xfacade`. Routing and the firewall are still handled by NetworkManager. The stub has to register before qcril starts: `DefaultDependencies=no`, `After=lxc-android-config.service`, `Before=ofono.service`, `User=radio`. In practice it registers at 11.9 seconds, netmgrd calls `createOemNetwork` at 16.2 and 17.1 seconds (once per SIM), and qcril starts at about 15.3 seconds. Starting the stub after qcril is not enough (tested: netmgrd picked it up, but qcril stayed at `DSI init not yet completed`). Same idea as Halium/android_device_halium_halium_arm64 PR #39 and mer-hybris/dummy_netd.
+
+Other configuration this depends on (in `boot/ut-init/rootfs-overlay/`):
+
+- `etc/deviceinfo/devices/stone.yaml`: `OfonoPlugin: binder`, so `ofonod-wrapper` loads `ofono-binder-plugin` instead of the socket RIL plugin.
+- `etc/ofono/binder.conf`: `ExpectSlots = slot1,slot2`. Each slot needs a `path` (`/ril_0`, `/ril_1`) and a unique `slot` (0, 1), or ofono silently drops the slot. Use `radioInterface = 1.5`, because the default 1.2 removes NR.
+- `etc/ofono/binder.d/qti.conf`: `extPlugin = qti` (IMS registration, VoLTE calls, SMS over IMS).
+- `etc/ofono/ril_subscription.d/stone.conf`: slots for `audiosystem-passthrough-qti` only.
+- APN: ofono's apndb plugin does not match `mvno_type=gid` and picked Vidéotron's `media.ng` for this Fizz SIM. The internet context `/ril_0/context1` was changed by hand over D-Bus to `Name=Fizz`, `AccessPointName=mobile.bm`, `Protocol=dual`. ofono saves this per IMSI, so it survives a reboot, but a new SIM or a reflashed userdata needs it set again. `media.ng` was not what caused the 4100; it is simply the wrong APN for Fizz.
+
+Measured result (capture in `out/halium14/logs/mobile-data-ok/`, gitignored): in the whole boot, `setupDataCall_1_5` was sent once and succeeded (`status=0, cid=0, ifname=rmnet_data1`). NetworkManager had 0 `Activation: failed`. `rmnet_data1` is `10.116.33.97/30` with a default route through `10.116.33.98`. `ping 1.1.1.1` had 0% loss, 44 to 72 ms. DNS through NM's dnsmasq works. `https://ubuntu.com` returned 200 in 0.87 seconds. Registration was `registered`, `nr`, 302/490 "Fizz" (not roaming). The IMS PDN was brought up by the modem/imsd on `rmnet_data2` (a public IPv6 /64). The network indicator's CPU was 0 over 5 seconds and D-Bus answered in 30 ms. `vendor.dataqti` (`/vendor/bin/qti`) stopped crash-looping (pid stable). The phone clock is now correct (2026-11-10).
+
+#### Still open for mobile data
+
+- IPv6 on the internet PDN: `Protocol=dual` was requested (qcril received `IPV4V6`), but ofono's data call response is `type=0` (IP), so the network only granted IPv4 for `mobile.bm`. This is the carrier's choice, not a local configuration problem. The IMS PDN has IPv6.
+- MMS: `/ril_0/context2` has been changed to `Name=Fizz MMS`, `AccessPointName=mobile.bm`, `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (saved per IMSI). The internet and MMS APNs are the same. UBports ofono-sailfish #8 reports that an MMS context with the same APN as the internet context can fail. Sending has not been tested.
+- apndb: `tools/apndb-prefer-mvno.py` is called from `build-boot-image.sh`. It takes the rootfs `lineageos-apndb/apns-conf.xml`, keeps only the Fizz entries for 302/500 (`mvno_type=gid`, `mvno_match_data=55`, with those two attributes removed), and drops Vidéotron's four 302/500 entries. The output is written to `/usr/share/stone/apns-conf.xml` (generated, not committed). `ofono.service.d/zz-stone-apndb.conf` sets `OFONO_SYSTEM_APNDB_PATH` to it. This only affects a SIM that has no saved contexts yet. The side effect is that a real Vidéotron SIM would get Fizz's APN.
+- When data fails, the indicator's immediate-retry loop still freezes Settings. That is a bug in the indicator itself. Now that data works it does not trigger, but it will come back if data breaks again.
+- Debugging leftovers: `ofono.service.d/zz-stone-debug.conf` (ofono `-d`) and `persist.vendor.radio.adb_log_on=1` (verbose qcril logging) are both still on. Turn them off once calls and VoLTE are done.
+- Only SIM 1 has been tested. Slot 2 is empty.
+
 ### Implementation notes
 
+2026-11-10: the overlay is ready, and `boot-ut.img` has been packed. It has not been written to the phone yet.
+
+The baseband is not the problem. In the `#9` session the following are all running: the modem subsystem, `pd-mapper`, `rmt_storage`, `tftp_server`, `netmgrd`, `imsdaemon`, `ims_rtp_daemon`, and two `qcrilNrd` instances (`persist.radio.multisim.config=dsds`). `ril.mcc.mnc0` is `302500`, which means qcril has already read the Fizz SIM (Vidéotron network). ofono simply never connected to qcril:
+
+- `ofono.service` uses `lxc-android-config`'s `ofonod-wrapper`. It only loads `ofono-binder-plugin` when `device-info get OfonoPlugin` is `binder`. Otherwise it loads the socket RIL plugin, and `/etc/ofono/ril_subscription.conf` points at `/dev/socket/rild`, which does not exist on Android 14. `device-info` reports `Detected name: stone` (from `ro.product.device`), but `/etc/deviceinfo/devices/stone.yaml` does not exist, so the result is `Unknown prop`.
+- The vendor manifest has HIDL `android.hardware.radio@1.5::IRadio/slot1,slot2`, `radio.config@1.1::IRadioConfig/default`, and `vendor.qti.hardware.radio.ims@1.7::IImsRadio/imsradio0,1`. Listing hwservicemanager as phablet with `python3-gbinder` showed every version from 1.0 to 1.5/1.7 registered, along with `vendor.qti.hardware.radio.am@1.0::IQcRilAudio/slot1,2`.
+- The installed `ofono-binder-plugin` 1.1.33 defaults to `radioInterface` 1.2. Below 1.4, `binder_plugin.c` removes NR from the slot's technologies. `ofono-binder-plugin-ext-qti` registers itself as `qti`, but the package does not install the `binder.d/qti.conf` that enables it. That extension connects to `IImsRadio@1.2/imsradio<slot index>` and provides IMS registration, VoLTE calls, and SMS.
+- In the source, `ofono_conf_merge_files()` merges `binder.conf` with `binder.d/*.conf`, and `ofono_conf_get_string()` falls back from `[slotN]` to `[Settings]`, so an `extPlugin` in `[Settings]` applies to both slots.
+- The default identity is `radio:radio`. On UT, `radio` is uid/gid 1001. `/dev/binderfs/hwbinder` is 0666. `/etc/dbus-1/system.d/ofono.conf` allows `radio` to own `org.ofono`.
+- In the LineageOS apndb that `ofonod-wrapper` uses, 302/500 has Fizz `mobile.bm` (default/mms/supl) and `ims` (IPv6), both matched by GID 55, plus the Vidéotron `media.ng`/`ims` entries.
+
+`audiosystem-passthrough-qti` (exit status 2) gets its slots from `[ril_N] transport=binder:name=<slot>` in `/etc/ofono/ril_subscription.conf` and `ril_subscription.d/*.conf` (mer-hybris `src/impl-qti.c`). The default file only has `socket=`, so the client list is empty and it exits. This is unrelated to PulseAudio.
+
+New overlay files, in `boot/ut-init/rootfs-overlay/`:
+
+- `etc/deviceinfo/devices/stone.yaml`: `OfonoPlugin: binder`. Tested as phablet with `DEVICEINFO_DEVICE_PATH` pointing at a copy: `device-info get OfonoPlugin` returned `binder`, and `GridUnit` was still 21.
+- `etc/ofono/binder.conf`: `ExpectSlots = slot1,slot2`, with `radioInterface = 1.5` for both slots.
+- `etc/ofono/binder.d/qti.conf`: `extPlugin = qti`.
+- `etc/ofono/ril_subscription.d/stone.conf`: `[ril_0] transport = binder:name=slot1` and `[ril_1] ... slot2`, only for audiosystem-passthrough. The socket RIL plugin is disabled, so ofono does not read it.
+
+`out/halium14/boot-ut.img`: kernel unchanged, byte-for-byte the `#9` Image. The ramdisk adds the four files above. SHA256 `a9122c29ea6bad4d5826c768c3f4a7390bf2d69a2bd2240d257fbcbb0459d2ba` (stale; see the Events below. The current one is `610a4bc6…`). The Wi-Fi image before this change is `out/halium14/boot-ut-9-wifi.img` (`beeb8e43…`).
+
+Call audio is not done. audiosystem-passthrough forwards qcril's `setParameters` through PulseAudio to the droid HAL. The HAL that can be loaded here is still the 64-bit empty `audio.primary.default.so` from item 3, so the passthrough alone produces no call audio. The ALSA side already has `VoiceMMode1` (`hw:0,2`, hostless playback and capture). `mixer_paths_qrdsku1.xml` has `voicemmode1-call`, `handset`, `voice-speaker`, and `handset-mic`. That has to be set up and tested during a live call.
+
+Manual test, after the user puts the phone into fastboot:
+
+1. `fastboot flash boot_b out/halium14/boot-ut.img`. Do not touch any other partition. `fastboot reboot`.
+2. After unlocking, look at the status bar and at Settings → Cellular: whether the SIM is detected, the operator (Fizz / Vidéotron), and the network type (4G/5G).
+3. Turn Wi-Fi off and open a web page, to test mobile data.
+4. Place a call to a number you can answer, and see whether it rings and connects. Whether there is sound is not part of this pass. Report it as it is.
+5. Host side, quickly: `adb shell 'device-info get OfonoPlugin; /usr/share/ofono/scripts/list-modems; systemctl --user status audiosystem-passthrough-qti'`.
+
+If there is no modem, read ofono's journal first. Do not reflash in a loop. To roll back, write `out/halium14/boot-ut-9-wifi.img`.
+
 ### Events
+
+- Separated the two cases: qcril is running and has read the SIM (`ril.mcc.mnc0=302500`). ofono loaded the socket RIL plugin and waited for a `/dev/socket/rild` that does not exist.
+- Confirmed the HIDL radio and IMS services are registered on hwbinder.
+- Added the device-info, binder plugin, QTI extension, and passthrough slot configuration, and packed `boot-ut.img`. Nothing was flashed.
+- The user wrote `a9122c29…`. No SIM was detected, and "show IMEI" was missing from Settings. On the phone: `device-info get OfonoPlugin` was `binder`, ofonod ran as `radio` with `-P ...,ril`, and the binder plugin initialized. `audiosystem-passthrough` now stays running. But `list-modems` was empty. The ofono journal had `Missing path for slot slot1` and `slot2`. In `binder_plugin_create_slot()`, the `path` key is required for every slot, whether it is auto-discovered or listed in `ExpectSlots`. Without it the function returns NULL and the slot is not created. The previous `binder.conf` had only `radioInterface` in each `[slotN]`. This was missed in the previous round.
+- `binder.conf` now gives `[slot1]` `path = /ril_0`, `slot = 0`, and `[slot2]` `path = /ril_1`, `slot = 1`. The slot number defaults to 0, and two zeros would fail the `Duplicate slot` check. The QTI extension also uses this number to pick `imsradio<N>`. `/ril_0` is the modem path UT's telepathy-ofono expects.
+- Temporarily added `etc/systemd/system/ofono.service.d/zz-stone-debug.conf`, which passes `-d *binder*:*qti*:*sim*:*netreg*:*ims*` to `ofonod-wrapper` (ofono's `-d` splits on `:` and matches source file names). There is no root for live debugging, so if this boot still has no modem, the journal shows which step slot creation, the IRadio connection, or SIM status reached. Remove it once the modem works.
+- The new `boot-ut.img` SHA256 is `610a4bc6e222e30debf0169a0033dad6a63c9ec042b37e40450034cbbd5dc8d5`. The kernel is still `#9`. Not yet written. The manual test steps are the same as above.
+- The user wrote `610a4bc6…`. The status bar showed a 5G signal. ofono has `/ril_0` and `/ril_1`, and the IMSI is `redacted`. Then Settings would not open (it started, hung, and was closed about 25 seconds later; after a reboot it opened once with no cellular section), and turning Wi-Fi off in the control center did not take effect. Cause: `lomiri-indicator-network-service` was stuck in a loop. It kept asking NetworkManager to activate the gsm connection on `ril_0`. NM asked ofono to activate `/ril_0/context1`, `setupDataCall_1_5` returned `status=4100` (`OEM_DCFAILCAUSE_4`, a Qualcomm vendor cause) right away, and the indicator immediately retried. That was about 12 times per second, over 10,000 times in one boot, with NM's active connection IDs reaching 7000+. The indicator was so busy processing NM signals that it stopped answering D-Bus (a `NetworkingStatus` query timed out after 5 seconds). Both the Settings network pages and the Wi-Fi toggle depend on it.
+- The contexts the apndb provisioned were Vidéotron's (`media.ng`). ofono's apndb plugin does not match on `mvno_type=gid`. According to the apndb and Fizz's own help pages, the Fizz APN is `mobile.bm` (MMSC `http://mms.mobile.bm`, proxy `mmsproxy.mobile.bm:80`). Through phablet's D-Bus policy (`ofono-phablet.conf`), `/ril_0/context1` was changed to `Name=Fizz`, `AccessPointName=mobile.bm`, `Protocol=dual`. ofono saves this per IMSI. It still returned 4100, so this is not the network rejecting the APN name or the IP family.
+- logd only shows phablet's own logs, so qcril's radio log cannot be read without root. Neither the Sailfish/UBports discussions nor the AOSP documentation give a definition for 4100. Compared with Android's `setupDataCall`, the plugin's `DataProfileInfo` 1.5 has `profileId=INVALID`, `type=COMMON`, `bearerBitmap`/`mtu` 0, and `persistent`/`preferred` false (Android: profileId 0, 3GPP). Which field qcril rejects can only be decided from its log.
+- Temporary unblock: setting `ConnectionManager.Powered=false` stopped it for a moment, but after the indicator restarted, `SetDefaultDataSim` turned data back on and the loop resumed. As long as setup keeps failing, the indicator cannot stop by itself. `systemctl --user mask --runtime lomiri-indicator-network.service`, then stopping it and sending SIGKILL. The runtime mask is lost on reboot. After that, `setupDataCall` stayed at 0 for 15 seconds, and `ril_0` stayed `disconnected`. The cost is that there is no network indicator in the status bar until reboot.
+- The user confirmed that before the reboot Settings could see both IMEIs, the Phone app could see the Fizz network, calls could not be made, and the browser could not open pages. After the reboot the indicator loop came back, and Settings hung again. The user's `sudo logcat -b radio -d` actually succeeded and saved `~/radio.txt` (246 lines), but `persist.vendor.radio.adb_log_on=0`, so qcril only logged startup messages (including `qcril_data_get_dds_sub_info: DSD Client unavailable`). There were no data call details.
+- Registration state: `NetworkRegistration` is `Status=roaming`, `Technology=hspa`, MCC/MNC `302/610` (Bell), `Name=Fizz EXT`. In ofono, `ConnectionManager.RoamingAllowed=true`. The plugin's `setupDataCall_1_5` always sends `roamingAllowed=TRUE`. HIDL IRadio has no separate `setDataRoamingEnabled`, so it is not a roaming switch that was never set. IMS `Registered=false`, `VoiceCapable=false`.
+- Phone call: `binder_voicecall_dial()` reached qcril, `dialResponse` returned, and the call stayed at `status=2` (DIALING) for 18.6 seconds until the user hung up. It never went to ALERTING/ACTIVE, and ofono received no call state change in between.
+- `vendor.dataqti` (`/vendor/bin/qti`, QTI USB tethering/RmNet bridge) is in a restart loop, with a new pid every 5 to 10 seconds. `vendor.qcrild`/`qcrild2` are `/vendor/bin/hw/qcrilNrd`, and they are not restarting. `qti` most likely conflicts with usb-moded over the USB gadget. It is not on the phone data path. It is recorded here for later.
+- Prepared `~/stone-radio-debug.sh` (source in the scratchpad, not in the repository): run once with sudo. It sets `persist.vendor.radio.adb_log_on=1`, clears logcat, restarts `vendor.qcrild`/`qcrild2` with `ctl.restart` (ofono reconnects by itself), waits 90 seconds for the user to place a call while data keeps retrying on its own, and then writes radio/main/system/crash to `~/radio-debug.txt`. The persist property stays on until the cause is found.
+- The user ran `stone-radio-debug.sh`, which saved 11078 lines. This time the call connected (3G, UMTS), but there was no sound in either direction. The qcril log has `QcRilUnsolAudioStateChangedMessage{vsid=297816064;call_state=2;call_type=UMTS}` (vsid 0x11C05000 = VoiceMMode1), but `sendUnsolAudioStateChanged: ind null: true`. Nobody receives qcril's audio state, and nobody starts the voice path. The call ended with `call failure cause 145`, and `getLastCallFailCause` returned 16 (normal clearing).
+- The capture had no data calls in it. After `ctl.restart` of qcril, ofono's `setupDataCall` stopped for about 3 minutes (uptime minutes 13 to 16), exactly covering the 90 seconds of capture. Also seen: `binder_radio_power_on/off()` toggles slot1 every 100 ms or so. Earlier, "Unexpected data call failure" was followed by `binder_radio_power_off`. It belongs to the same failure loop.
+- The user added: when this phone ran Android, VoLTE needed PixelIMS (a carrier-config override) before the VoLTE switch appeared. In other words the network and modem support IMS, and it is the carrier config that hides it. Right now it is 3G roaming (Bell), so IMS cannot register anyway. Look at this again once LTE data works.
+- Call audio: following `voicemmode1-call[ handset]`, `handset`, `handset-mic`, and `speaker-mic` in `mixer_paths_qrdsku1.xml`, wrote `usr/lib/stone/call-audio.sh` (`on earpiece|speaker`/`off`: set the mixer, then hold `hw:0,2` open in both directions with `aplay`/`arecord`), `call-audio-watch.sh` (polls ofono `GetCalls` every 0.5 seconds, turns it on for dialing/alerting/active/held and off otherwise), and the user unit `etc/systemd/user/stone-call-audio.service`. All the controls exist, and phablet can access `pcmC0D2p/c` (group audio).
+- The first dry run of `call-audio.sh on earpiece` with no call in progress rebooted the whole phone. USB dropped, it came back after 45 seconds with uptime 56 seconds, and `powerup.reason` changed from `0x40041` to `0x40141`. Opening the VoiceMMode1 PCM while the modem has no voice session is very likely an ADSP failure that escalated to a system reset. That only happens when this is run outside a call. The Android HAL also only opens it during a call. The `pulseaudio.service.wants` symlink was removed, so the unit is not enabled for now. Until pstore shows the cause, do not run it again with no call.
+- Prepared `~/stone-capture.sh` (run once with sudo): copies `/sys/fs/pstore` (the kernel log from the reset), the radio/main/system/crash logcat buffers, and dmesg to `~/stone-capture/`. `adb_log_on` stayed 1 after the reboot, and ofono had already made 323 `setupDataCall` attempts in this boot, so this time the radio buffer should contain qcril's handling of the data call.
+- The user ran `stone-capture.sh` (`~/stone-capture/`, 14700 lines of radio). pstore was empty, so the kernel log from the reset is gone. qcril's verdict on the data call: `[DataModule]: Handling msg = SetupDataCallRequestMessage Params=[3,-1,mobile.bm,IPV4V6,IPV4V6,...]`, then immediately `[CallManager]: DSI init not yet completed`, then `setupDataCallResponse resp=respErr=4 cid=-1{4100,...}`. That happened 406 times and never reached the modem. `imsd` hit the same thing (`dsi_get_data_srvc handle returned NULL so wait for dsi_init_cb`).
+- The DSI holdup comes from `netmgrd` (`ro.vendor.use_data_netmgrd=true`). After starting it only logged `NetmgrNetdClientInit(): Looking for Netd service` / `registerServerNotification(): Successfully registered for Netd HAL service`, and then stopped there. Its symbols contain `V1_1::INetd::getService` and `registerForNotifications`, and it calls `createOemNetwork`, `addInterfaceToOemNetwork`, `addRouteToOemNetwork`, `setIpForwardEnable`, and `setForwardingBetweenInterfaces`. Neither hwbinder nor binder has any netd service, and the Halium 14 system image has no netd stub. Halium/android_device_halium_halium_arm64 PR #39 describes the same thing: Halium has no netd, and vendor data daemons get stuck waiting for INetd. The old HIDL stub was `android.system.net.netd@1.1-service.stub`, and mer-hybris/dummy_netd is the libgbinder version.
+- Added `usr/lib/stone/netd-stub.py` (python3-gbinder, already installed): registers `android.system.net.netd@1.1::INetd/default` on `/dev/hwbinder` (interface chain 1.1, 1.0). Every method returns a complete HIDL reply (transport status 0, then the return values). `createOemNetwork` returns a handle in the form `(netId<<32)|0xfacade` and a mark of `netId|0x30000`. dummy_netd returns an empty reply, which a HIDL client would read as a transport error. Started temporarily as a phablet user unit: registration succeeded, and netmgrd immediately called `createOemNetwork` twice (netId 100/101, one per SIM). But qcril still returned `DSI init not yet completed`: DSI initialization happens once when qcril starts, and netmgrd was not ready at that point, so the stub has to be there before qcril starts.
+- Added `etc/systemd/system/stone-netd-stub.service` (`multi-user.target.wants`): `DefaultDependencies=no`, `After=local-fs.target lxc-android-config.service`, `Before=ofono.service`, `User=radio`. `lxc-android-config` is marked started at about 11.8 seconds. From the container's `ro.boottime`, netmgrd is at about 14.6 seconds and qcril at about 15.3 seconds, so the stub registers before both. `stone-call-audio.service` is still not enabled.
+- New `boot-ut.img` SHA256 `b72e43e134eecbefca6c40a024e51336b369405fb32f1226162b64cb60a7e21d`, still kernel `#9`. Not yet written.
+- 2026-11-10: the user wrote `b72e43e1…` and confirmed 5G mobile data works. Measured results are in "Current status" at the start of this item. IMS has registered. Kept at `out/halium14/boot-ut-data.img`.
+- The user started `stone-call-audio` (the version in the rootfs, which still used aplay/arecord) and placed a call. The status bar stayed on 5G (VoNR/VoLTE). The other phone rang, there was no sound, and then the phone rebooted. The persistent journal ends at 440.35 seconds (the watcher had just started), and the "call audio: off -> earpiece" line was never written. journald syncs only every few minutes, so the whole call was lost.
+- Not a DSP crash: `adsp`, `modem`, and every other subsystem have `restart_level=RELATED`, so an ADSP fault would only restart the ADSP. `panic_on_oops=1`, `panic=5`. ramoops is configured (`ramoops@0xd0000000`, `CONFIG_PSTORE_RAM=y`), but pstore was empty after both resets.
+- Added a kernel log recorder (`~/.config/stone/stone-klog.py`, in the scratchpad, not in the repository): phablet cannot open `/dev/kmsg`, so `dmesg -w` does not work. It polls `klogctl(SYSLOG_ACTION_READ_ALL)` every 100 ms and fsyncs each line, with step markers in between. It runs as a user transient unit.
+- Step by step, with no call in progress: applying only the mixer (earpiece plus mic) was fine. Mixer plus `aplay -D hw:0,2` (playback only) reset the phone, and the log stops at "aplay started" with no messages at all. In `msm-pcm-voice-v2.c`, `msm_pcm_ops` has no `.copy`/`.pointer`, there is no preallocated buffer, and `hw_params` only sets `snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer)`. This is a hostless front end. When aplay writes, ALSA copies into a NULL `dma_area`, the kernel oopses, and `panic_on_oops` resets it. A playback-only `prepare` does not call `voc_start_voice_call` at all (that needs both directions), which rules out the DSP. The Android HAL only does tinyalsa `pcm_open`/`pcm_start` on this PCM and never writes data.
+- Added `usr/lib/stone/voice-pcm-hold.py` (ctypes plus libasound): opens `hw:0,2` playback and capture, S16_LE, 8 kHz, mono, 40 ms. `stop_threshold` is set to boundary and `start_threshold` to 1, then `snd_pcm_start`. It never reads or writes, and closes on SIGTERM. `call-audio.sh` now uses it for `pcm_on` (plus debug subcommands `mixer`, `mixer-off`, `pcm-rx`, `pcm-tx`, `pcm-off`). Repeating the same playback-only step with it: no crash. Both directions with no call: no crash. The kernel log shows `voc_start_voice_call` going all the way through CVS/CVP setup, but `voice_get_cal: No cal data for cal 5/6/8`, `voice_send_cvp_register_dev_cfg_cmd: ADSP_EBADPARAM`, and `voice_send_vol_step_cmd: ADSP_EFAILED`. There is no ACDB calibration (the Android HAL loads it through libacdbloader). Speaker playback shows the same "no cal" messages but still produces sound. Whether voice can be heard without calibration has to be tested with a real call.
+- For testing, `call-audio-watch.sh` is running from the copy in the home directory as user transient unit `stone-call-audio-test` (`STONE_CALL_AUDIO=~/.config/stone/call-audio.sh`). It is lost on reboot. **The `/usr/lib/stone/call-audio.sh` in the current `boot_b` image is still the aplay version, so do not `systemctl --user start stone-call-audio`.**
+- New `boot-ut.img` SHA256 `64a59fa4d54ee5f4ea4e178303b1639f462a8a30ffc9f30731a380f5688da4ca` (kernel `#9`, plus `voice-pcm-hold.py`, the fixed `call-audio.sh`, and the generated apndb with its drop-in). `stone-call-audio.service` is still not enabled. Not yet written.
+- The user placed a call with `stone-call-audio-test`: no crash, the earpiece can hear the other side, but the other side cannot hear this phone. MMS sending and receiving work. In the call's kernel log, AFE `0xb030` (RX_CDC_DMA_RX_0) and `0xb037` (TX_CDC_DMA_TX_3) both start and stop with the call, and `voc_start_voice_call` gets the same no-cal errors as before.
+- Microphone hardware is fine: with no call, recording 2 seconds each from `amic1` (SWR_MIC0/ADC1), `amic3` (SWR_MIC4/ADC2 INP3), and the two-channel `handset-mic` through MultiMedia1 (`hw:0,0`, `MultiMedia1 Mixer TX_CDC_DMA_TX_3`) gives RMS 50/78/45+72 and peaks 218 to 337, which is room noise, not digital silence. So the problem is inside the voice uplink.
+- In q6voice, `default_mute_val = 0` (unmuted by default). Without calibration, `voice_get_topology()` falls back to `VSS_IVOCPROC_TOPOLOGY_ID_NONE` (passthrough). But the uplink was getting the two channels of `handset-mic` (`TX_CDC_DMA_TX_3 Channels=Two`). Android only uses dual-mic routing together with the dual-mic calibration in ACDB.
+- `call-audio.sh` now defaults to a mono mic: earpiece uses `amic1` (DEC0 <- SWR_MIC0, `Channels=One`), speaker uses `amic3` (SWR_MIC4). Setting `~/.config/stone/call-mic` to `dual` switches back to two mics. After the PCM starts, it sends the HAL's `voice_set_mic_mute()` equivalent, writing `{0, 0xFFFFFFFF, 20}` to `Voice Tx Mute`, `Voice Tx Device Mute`, and `Voice Rx Device Mute`. These are write-only multi-value controls that `amixer cset` cannot write because it reads first ("Cannot read the given element"), so added `usr/lib/stone/ctl-write.py` (libasound `snd_ctl_elem_write`). A full dry run with no call (`on earpiece`, mono): no crash.
+- Added debug stage `call-audio.sh rec-ul`: in-call recording of the uplink (`MultiMedia9 Mixer VOC_REC_UL`, `hw:0,23`, a normal capture FE). With `STONE_CALL_REC_UL=1`, the watcher records 8 seconds after the call becomes `active` to `$XDG_RUNTIME_DIR/stone-uplink-*.raw` and prints the RMS. That tells "the DSP never received the mic" apart from "the DSP sent it but the far end cannot hear it". `ofono-binder-plugin` 1.1.33 already provides IMS calls, and the vendor audio HAL is running as `android.hardware.audio@7.0::IDevicesFactory/default` inside the container (with ACDB). If ACDB calibration turns out to be required, the fallback is to drive that HAL over HIDL. `module-droid-hidl` is only the AudioSystem passthrough and cannot serve as a HAL client.
+- Call with mono mic plus unmute: the other side can hear and understand, but it "drops several times a second, like a poor Bluetooth connection". This phone hears the other side clearly. The 8-second uplink recorded through `VOC_REC_UL` (what the DSP sends to the modem) has no exact-zero gaps. It is continuous speech plus pauses, but the level is low: speech peaks around 2145 (about -24 dBFS), the 10 ms window RMS is p50 8.3 and p90 211, and pauses are around RMS 3. The earlier room-noise recording through the plain recording path was RMS 50. Most likely the vocoder's VAD/DTX treats the softer parts of this low-level speech as silence and drops them. On Android, uplink gain comes from ACDB, and the passthrough topology has none.
+- Gain controls: `TX_DECn Volume` (bolero tx-macro) is 1 dB per step with 84 = 0 dB and a maximum of 124 (+40 dB). `ADCn Volume` (wcd937x `analog_gain`, `DECLARE_TLV_DB_SCALE(0, 25, 1)`) is only 0.25 dB per step, so 0 to 20 covers only 0 to 5 dB. Measured on room noise: going from `TX_DEC0 Volume` 84 to 98 took RMS from 52.6 to 224.1 (+12.6 dB, nominal +14).
+- `call-audio.sh` now sets `TX_DEC0`/`1`/`2 Volume` to 84+14 (configurable in dB through `~/.config/stone/call-mic-gain`, 0 to 40) when the call starts, and back to 84 when it ends. Verified on the phone: 98 during a call, 84 after hang-up. The watcher still has `STONE_CALL_REC_UL=1`, so the next call records the uplink again for comparison.
 
 ## 6. Bluetooth
 

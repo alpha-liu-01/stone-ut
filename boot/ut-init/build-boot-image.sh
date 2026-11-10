@@ -46,6 +46,18 @@ if [ -f "$VHCI" ]; then
     mkdir -p "$STAGE/root/stone-rootfs/usr/lib/modules/stone"
     cp "$VHCI" "$STAGE/root/stone-rootfs/usr/lib/modules/stone/hci_vhci.ko"
 fi
+# ofono's apndb provisioning ignores mvno_type, so a Fizz SIM (302/500,
+# GID1 55) gets Videotron's APNs. Ship a copy of the rootfs apndb where the
+# Fizz entries are the plain 302/500 entries; ofono.service.d/zz-stone-apndb
+# points OFONO_SYSTEM_APNDB_PATH at it. Generated, not committed.
+APNDB_SRC=${APNDB_SRC:-"$OUT/rootfs-tree/usr/share/lineageos-apndb/apns-conf.xml"}
+if [ -f "$APNDB_SRC" ]; then
+    mkdir -p "$STAGE/root/stone-rootfs/usr/share/stone"
+    python3 -I "$ROOT/tools/apndb-prefer-mvno.py" "$APNDB_SRC" \
+        "$STAGE/root/stone-rootfs/usr/share/stone/apns-conf.xml" 302 500 gid 55
+else
+    echo "warning: $APNDB_SRC missing; Fizz SIMs will be provisioned as Videotron" >&2
+fi
 # Key for the usb-moded rescue sshd (10.15.19.82:8022); kept out of the repo.
 SSH_PUBKEY=${SSH_PUBKEY:-"$HOME/.ssh/id_ed25519.pub"}
 if [ -f "$SSH_PUBKEY" ]; then

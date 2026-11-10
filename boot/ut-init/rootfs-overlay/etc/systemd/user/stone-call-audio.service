@@ -1,0 +1,14 @@
+[Unit]
+Description=Route voice call audio (VoiceMMode1) while ofono has a call
+After=pulseaudio.service
+PartOf=pulseaudio.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/stone/call-audio-watch.sh
+ExecStopPost=/usr/lib/stone/call-audio.sh off
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=pulseaudio.service

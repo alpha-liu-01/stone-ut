@@ -1,0 +1,24 @@
+[Unit]
+Description=Stub android.system.net.netd@1.1::INetd for the vendor netmgrd
+# netmgrd waits for INetd/default before it finishes starting, and qcril's
+# data module (DSI) needs netmgrd. Register before the container's vendor
+# services come up; the stub re-registers if hwservicemanager restarts.
+# lxc-android-config is "started" at ~12 s of boot; netmgrd starts ~14.6 s and
+# qcril ~15.3 s (container boottime). Skip the default sysinit/basic
+# ordering so nothing pushes this past them.
+DefaultDependencies=no
+After=local-fs.target lxc-android-config.service
+Before=ofono.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/hwbinder ] && [ $i -lt 60 ]; do sleep 0.5; i=$((i+1)); done'
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/netd-stub.py
+User=radio
+Group=radio
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

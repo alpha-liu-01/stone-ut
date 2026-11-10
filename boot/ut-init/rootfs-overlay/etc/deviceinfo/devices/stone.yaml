@@ -1,0 +1,9 @@
+# libdeviceinfo looks for /etc/deviceinfo/devices/<ro.product.device>.yaml.
+# OfonoPlugin=binder makes lxc-android-config's ofonod-wrapper load
+# ofono-binder-plugin instead of the socket RIL plugin. Android 14 has no
+# /dev/socket/rild; qcril serves android.hardware.radio@1.5 over hwbinder.
+stone:
+  Name: stone
+  PrettyName: Xiaomi Redmi Note 12 Pro 5G
+  DeviceType: phone
+  OfonoPlugin: binder
