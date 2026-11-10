@@ -87,6 +87,14 @@ cp /tmp/report.txt /newroot/stone-initramfs-report.txt 2>/dev/null
 # boot from boot/ut-init/rootfs-overlay. The Ubuntu Touch image ships no
 # /usr/share/halium-overlay of its own.
 rm -rf /newroot/usr/share/halium-overlay
+# The copy below only adds and overwrites. Files that used to be in the
+# overlay and were dropped from it stay on the rootfs unless listed here.
+for f in \
+    etc/systemd/system/ofono.service.d/zz-stone-debug.conf \
+    etc/systemd/user/lomiri-full-greeter.service.d/stone-core.conf \
+    ; do
+    rm -f "/newroot/$f"
+done
 cp -R /stone-rootfs/. /newroot/ || log "could not install rootfs overlay"
 # Passwordless sudo exists only while booted from the trace image.
 if [ -f /stone-sudoers ]; then

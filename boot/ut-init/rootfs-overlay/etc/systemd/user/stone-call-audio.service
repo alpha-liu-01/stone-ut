@@ -1,7 +1,9 @@
 [Unit]
 Description=Route voice call audio (VoiceMMode1) while ofono has a call
+# Started with PulseAudio, but not PartOf it: the watcher drives ALSA
+# directly, and a PulseAudio restart mid-call must not run
+# "call-audio.sh off" and cut the call audio.
 After=pulseaudio.service
-PartOf=pulseaudio.service
 
 [Service]
 Type=simple

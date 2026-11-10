@@ -9,3 +9,6 @@ third_party/droidian-rootfs/
 out/
 kernel/build/
 kernel/build-14/
+
+# Python bytecode
+__pycache__/

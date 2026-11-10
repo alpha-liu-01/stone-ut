@@ -42,10 +42,15 @@ load-module module-switch-on-connect
 load-module module-null-sink sink_name=sink.fake.sco rate=8000 channels=1
 load-module module-null-source source_name=source.fake.sco rate=8000 channels=1
 
-### Automatically load the Pulseaudio Droid
-.ifexists module-droid-discover.so
-load-module module-droid-card-28 voice_virtual_stream=true config=/usr/share/stone/audio_policy_configuration.xml
-.endif
+### No Droid card. module-droid-card-28 can only load the 64-bit stub
+### audio.primary.default.so (the real HAL is 32-bit), so its sinks and
+### source go nowhere. Worse, lomiri-telephony-service finds its "voicecall"
+### profile and switches to it at the start of every call, and that switch
+### aborts PulseAudio (pa_source_assert_ref). Playback is sink.speaker below,
+### call audio is stone-call-audio.service.
+#.ifexists module-droid-discover.so
+#load-module module-droid-card-28 voice_virtual_stream=true config=/usr/share/stone/audio_policy_configuration.xml
+#.endif
 
 ### Automatically load the trust-store module
 .ifexists module-trust-store.so
@@ -138,8 +143,8 @@ load-module module-dbus-protocol
 load-module module-filter-heuristics
 load-module module-filter-apply
 
-### Speaker. The droid card above talks to the 64-bit stub HAL, which
-### accepts writes and does not reach the amp. MultiMedia5 is the
+### Speaker. The Droid card (disabled above) talked to the 64-bit stub HAL,
+### which accepts writes and does not reach the amp. MultiMedia5 is the
 ### low-latency front end used by mixer_paths_qrdsku1.xml.
 ### msm-pcm-q6 queues every mmap period to the DSP at start and requeues
 ### each one as it plays, so rewound data never reaches the speaker.

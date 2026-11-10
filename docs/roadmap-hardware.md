@@ -1,7 +1,7 @@
 # Hardware, after the display is up
 
 
-The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is now the normal `boot-ut.img` (kernel `#9`, carrying the netd stub; a copy is at `out/halium14/boot-ut-data.img`, SHA256 `b72e43e1…`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
+The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is now the normal `boot-ut.img` (kernel `#9`, carrying the netd stub; a copy is at `out/halium14/boot-ut-data.img`, SHA256 `b72e43e1…`). The image to flash next is `4af37a0d…` (call audio at +20 dB, no droid card, media-hub, apndb, cleanup; see the end of item 5). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
 
 `/etc/os-release` is Ubuntu 24.04.5 LTS. The root filesystem comes from `ubuntu-touch-android9plus-rootfs-arm64.tar.gz` on the 24.04-2.x channel. adb is up, serial `stone`. Once mobile data was up on 2026-11-10, the phone clock went from 1970 to the correct time.
 
@@ -13,7 +13,7 @@ The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user 
 - adb.
 - Speaker output (item 3).
 - Wi-Fi (item 4).
-- SIM, both IMEIs, mobile data (5G/NR), IMS registration (item 5). Calls connect but have no audio.
+- SIM, both IMEIs, mobile data (5G/NR), MMS, voice calls with audio in both directions (3G and IMS) (item 5).
 
 ## Fix order
 
@@ -215,9 +215,9 @@ The user added to the goal: LTE (or NR) data and LTE calls should both work. The
 | --- | --- |
 | SIM, IMEI, operator | Working. ofono has `/ril_0` and `/ril_1`, and Settings can see both IMEIs. |
 | Mobile data | Working. User confirmed 5G data. Measured on NR, Fizz 302/490: IPv4 ping and HTTPS work. |
-| 3G voice calls | The call connects, but there is no audio in either direction (see "Call audio" below). |
-| IMS / VoLTE | IMS has registered (`Registered=true`, `VoiceCapable=true`, `SmsCapable=true`). A VoLTE call has not been placed yet. |
-| Call audio | Both directions work (user confirmed). The earpiece is clear. With mono mic plus unmute, the other side can hear and understand, but it drops several times a second. Now testing +14 dB uplink gain (see the Events). |
+| Voice calls | Working (user confirmed "voice calls work nicely"). On 3G (UMTS) the call connects. On 5G the status bar stays on 5G (IMS: VoLTE/VoNR). |
+| IMS / VoLTE | IMS has registered (`Registered=true`, `VoiceCapable=true`, `SmsCapable=true`). Calls go out over IMS and connect. |
+| Call audio | Working: earpiece downlink is clear, and the microphone uplink is clear (user confirmed). See "Call audio: what fixed it". |
 | MMS | Working (user confirmed). The context has been changed to Fizz (`mobile.bm`, `http://mms.mobile.bm`, `mmsproxy.mobile.bm:80`). |
 
 #### Why mobile data did not work, and the fix
@@ -244,11 +244,47 @@ Measured result (capture in `out/halium14/logs/mobile-data-ok/`, gitignored): in
 #### Still open for mobile data
 
 - IPv6 on the internet PDN: `Protocol=dual` was requested (qcril received `IPV4V6`), but ofono's data call response is `type=0` (IP), so the network only granted IPv4 for `mobile.bm`. This is the carrier's choice, not a local configuration problem. The IMS PDN has IPv6.
-- MMS: `/ril_0/context2` has been changed to `Name=Fizz MMS`, `AccessPointName=mobile.bm`, `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (saved per IMSI). The internet and MMS APNs are the same. UBports ofono-sailfish #8 reports that an MMS context with the same APN as the internet context can fail. Sending has not been tested.
+- MMS: `/ril_0/context2` has been changed to `Name=Fizz MMS`, `AccessPointName=mobile.bm`, `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (saved per IMSI). The internet and MMS APNs are the same, which is what UBports ofono-sailfish #8 says can fail, but here the user confirmed MMS works.
 - apndb: `tools/apndb-prefer-mvno.py` is called from `build-boot-image.sh`. It takes the rootfs `lineageos-apndb/apns-conf.xml`, keeps only the Fizz entries for 302/500 (`mvno_type=gid`, `mvno_match_data=55`, with those two attributes removed), and drops Vidéotron's four 302/500 entries. The output is written to `/usr/share/stone/apns-conf.xml` (generated, not committed). `ofono.service.d/zz-stone-apndb.conf` sets `OFONO_SYSTEM_APNDB_PATH` to it. This only affects a SIM that has no saved contexts yet. The side effect is that a real Vidéotron SIM would get Fizz's APN.
 - When data fails, the indicator's immediate-retry loop still freezes Settings. That is a bug in the indicator itself. Now that data works it does not trigger, but it will come back if data breaks again.
-- Debugging leftovers: `ofono.service.d/zz-stone-debug.conf` (ofono `-d`) and `persist.vendor.radio.adb_log_on=1` (verbose qcril logging) are both still on. Turn them off once calls and VoLTE are done.
 - Only SIM 1 has been tested. Slot 2 is empty.
+
+#### Call audio: what fixed it
+
+The Android audio HAL cannot be used here (PulseAudio can only load the 64-bit stub `audio.primary.default.so`, item 3), so nothing starts the ADSP voice session. `stone-call-audio.service` (a user unit, enabled through `pulseaudio.service.wants`) runs `usr/lib/stone/call-audio-watch.sh`. It polls ofono's `VoiceCallManager.GetCalls` every 0.5 seconds and, while a call is `dialing`/`alerting`/`active`/`held`, runs `call-audio.sh on`:
+
+1. Mixer, following `mixer_paths_qrdsku1.xml`: earpiece `handset` + `RX_CDC_DMA_RX_0_Voice Mixer VoiceMMode1`. With `~/.config/stone/call-route` set to `speaker`, it uses the existing `speaker-route.sh` chain + `RX_CDC_DMA_RX_1_Voice Mixer VoiceMMode1`.
+2. Microphone: by default a single mic, mono (`amic1`, SWR_MIC0/ADC1 -> DEC0; the speaker route uses `amic3`, SWR_MIC4), `TX_CDC_DMA_TX_3 Channels=One`, `VoiceMMode1_Tx Mixer TX_CDC_DMA_TX_3_MMode1`. Without ACDB the voice uses `VSS_IVOCPROC_TOPOLOGY_ID_NONE`. With the two channels of the vendor's `handset-mic` the far end could hear nothing at all.
+3. Uplink gain: `TX_DEC0`/`1`/`2 Volume` is set to 84+20 (1 dB/step, 84 = 0 dB) and set back to 84 when the call ends. ACDB normally supplies this gain. Without it, the far end heard speech "drop several times a second" (the vocoder's VAD/DTX dropped the quieter speech). It can be tuned in dB through `~/.config/stone/call-mic-gain` (0 to 40). The in-call recordings through `VOC_REC_UL`, 8 kHz mono, 10 ms windows:
+
+   | Gain | Peak | Clipping | Active speech | Far end |
+   | --- | --- | --- | --- | --- |
+   | +0 dB | -23.7 dBFS | 0 | -44.8 dBFS | choppy |
+   | +14 dB | -14.3 dBFS | 0 | -32.3 dBFS | good once, choppy once |
+   | +20 dB (default) | -10.3 dBFS | 0 | -31.1 dBFS | clear |
+
+   "Active speech" is the RMS of the windows more than 4 times above the noise floor (p10). The +20 call also had no PulseAudio crash (the droid card was removed), so the two changes cannot be fully separated. +20 still leaves about 10 dB of headroom.
+4. `voice-pcm-hold.py` opens VoiceMMode1 (`hw:0,2`) in both directions, sets parameters, `snd_pcm_start`, and **never reads or writes**. This front end is hostless (`msm-pcm-voice-v2` has no `.copy`/`.pointer` and no DMA buffer). When aplay wrote to it, ALSA copied into a NULL `dma_area`, the kernel oopsed, and `panic_on_oops=1` reset the phone immediately (this happened twice). Once both directions are prepared, the kernel calls `voc_start_voice_call()` for the VoiceMMode1 session (vsid 0x11C05000, which qcril also reports for 3G calls).
+5. `ctl-write.py` writes `{0, 0xFFFFFFFF, 20}` to `Voice Tx Mute`, `Voice Tx Device Mute`, and `Voice Rx Device Mute` (the equivalent of the HAL's `voice_set_mic_mute()`). These are write-only array controls that `amixer cset` cannot write.
+
+When the call ends, `call-audio.sh off` stops the holder and clears the mixer and gain. The kernel logs `voice_get_cal: No cal data`, `ADSP_EBADPARAM` (dev cfg), and `voice volume failed` on every call. These are normal without ACDB and do not affect sound.
+
+Known limitations:
+
+- No ACDB calibration: no echo cancellation or noise suppression (fluence/ECNS) and no dual-mic processing. Over the earpiece the far end said it sounded fine. With speakerphone the far end may hear an echo.
+- The speaker button in the Phone app does not switch the route. The route is only decided at call start from `~/.config/stone/call-route`. Wired headsets and Bluetooth calls are not handled.
+- Downlink volume is fixed: the call volume keys do not change `Voice Rx Gain`.
+- The fallback, if calibration is ever required: the vendor audio HAL is running in the container as `android.hardware.audio@7.0::IDevicesFactory/default` and could be driven over HIDL (`setMode(IN_CALL)` and so on), with ACDB. `module-droid-hidl` is only the AudioSystem passthrough and cannot serve as that client.
+
+#### Debug tools
+
+`tools/phone-debug/` (none of them go into the boot image; push them to the phone when needed):
+
+- `stone-klog.py`: phablet cannot open `/dev/kmsg`. It polls `klogctl(READ_ALL)` every 100 ms and fsyncs, so the kernel log from right before a hard reset survives. **Writes about 10 MB an hour; stop it when done.**
+- `mic-test.sh amic1|amic3|handset-mic`: records 2 seconds of microphone through MultiMedia1 and prints the level.
+- `stone-radio-debug.sh` (sudo): turns on `persist.vendor.radio.adb_log_on` and restarts qcril (ofono pauses data for about 3 minutes afterwards), then captures 90 seconds. `stone-radio-debug.sh off` turns it back off (effective at the next boot).
+- `stone-capture.sh` (sudo): copies pstore, the radio/main/system/crash logcat buffers, and dmesg.
+- `call-audio.sh` debug subcommands: `mixer`, `mixer-off`, `pcm-rx`, `pcm-tx`, `pcm-off`, `unmute`, `rec-ul [seconds] [file]` (in-call uplink recording, `MultiMedia9 <- VOC_REC_UL`, `hw:0,23`). Setting `STONE_CALL_REC_UL=1` on the watcher records 8 seconds automatically on every call.
 
 ### Implementation notes
 
@@ -331,6 +367,26 @@ If there is no modem, read ofono's journal first. Do not reflash in a loop. To r
 - Call with mono mic plus unmute: the other side can hear and understand, but it "drops several times a second, like a poor Bluetooth connection". This phone hears the other side clearly. The 8-second uplink recorded through `VOC_REC_UL` (what the DSP sends to the modem) has no exact-zero gaps. It is continuous speech plus pauses, but the level is low: speech peaks around 2145 (about -24 dBFS), the 10 ms window RMS is p50 8.3 and p90 211, and pauses are around RMS 3. The earlier room-noise recording through the plain recording path was RMS 50. Most likely the vocoder's VAD/DTX treats the softer parts of this low-level speech as silence and drops them. On Android, uplink gain comes from ACDB, and the passthrough topology has none.
 - Gain controls: `TX_DECn Volume` (bolero tx-macro) is 1 dB per step with 84 = 0 dB and a maximum of 124 (+40 dB). `ADCn Volume` (wcd937x `analog_gain`, `DECLARE_TLV_DB_SCALE(0, 25, 1)`) is only 0.25 dB per step, so 0 to 20 covers only 0 to 5 dB. Measured on room noise: going from `TX_DEC0 Volume` 84 to 98 took RMS from 52.6 to 224.1 (+12.6 dB, nominal +14).
 - `call-audio.sh` now sets `TX_DEC0`/`1`/`2 Volume` to 84+14 (configurable in dB through `~/.config/stone/call-mic-gain`, 0 to 40) when the call starts, and back to 84 when it ends. Verified on the phone: 98 during a call, 84 after hang-up. The watcher still has `STONE_CALL_REC_UL=1`, so the next call records the uplink again for comparison.
+- The user confirmed "voice calls work nicely". Defaults were used (no `call-mic`/`call-mic-gain`/`call-route` files). Uplink RMS 554, peak 6326 (previous call 124/2145).
+- Cleanup (2026-11-10). All of the following is commit `b9d199d` plus this round:
+  - Stopped `stone-klog` (it had already written 11.6 MB, with an fsync every 100 ms). The logs, uplink recordings, and `stone-capture/` were moved to `out/halium14/logs/call-audio-debug/` (gitignored), and deleted from the phone's home directory along with `stone-*.sh`.
+  - The whole of `~/.config/stone` and `~/.config/systemd/user` was backed up to `out/halium14/logs/phone-home-backup-2026-11-10/`. Then the unreferenced experiment leftovers from item 3 were deleted (`libaa-peer.so`, `libbt.so`, `preload.txt`, `pulse-ns.sh`, `bt.txt`, `pulse.log`, `click.wav`, `tone.wav`).
+  - PulseAudio had been running all along from phablet's own `~/.config/systemd/user/pulseaudio.service.d/zz-stone-audio.conf` and `~/.config/stone/touch.pa`, which overrode the overlay. A diff showed the content was the same as the overlay's `/etc/pulse/stone-touch.pa` and `/usr/share/stone/*.xml` apart from paths and comments. Deleted the home drop-in and copies. After restarting, `PULSE_SCRIPT=/etc/pulse/stone-touch.pa`, the default sink was still `sink.speaker`, and the sinks were unchanged.
+  - The media-hub fix from item 3 existed only in the home directory (a patched `media-hub-server` plus a user drop-in), so a reflashed userdata would have lost it. The whole patch is 66 bytes at `0x33ed4` (an empty label is replaced with the static UTF-16 `"unconfined"`). `tools/patch-media-hub.py` checks the input SHA256 (`fa86280b…`, media-hub 4.7~20260611100903.31~3b69471) and the output SHA256 (`c75069d1…`, identical to the copy that was verified on the phone). `build-boot-image.sh` uses it to generate `/usr/lib/stone/media-hub-server` from the rootfs tree, and the overlay gained `etc/systemd/user/media-hub.service.d/zz-stone-unconfined.conf`.
+  - `ofono.service.d/zz-stone-debug.conf` was removed from the overlay. `init` only copies the overlay and never removes files that were dropped from it, so it now has a removal list: `zz-stone-debug.conf` and `etc/systemd/user/lomiri-full-greeter.service.d/stone-core.conf`. The latter is the `LimitCORE=infinity` from the Lomiri crash debugging in the halium14 work. It was never in git, and with `core_pattern=core` it would leave a full core dump on every greeter crash. Comparing the phone with the overlay, those are the only two stale stone files.
+  - `stone-call-audio.service` enabled (`etc/systemd/user/pulseaudio.service.wants`). `STONE_CALL_REC_UL` is not set.
+  - `tools/phone-debug/` gained `stone-klog.py`, `mic-test.sh`, `stone-radio-debug.sh` (with a new `off`), and `stone-capture.sh`.
+  - `boot/ut-init/__pycache__/*.pyc` removed from git, and `.gitignore` gained `__pycache__/`.
+  - Still needs root: `persist.vendor.radio.adb_log_on=1`. The user resets it with `sudo sh stone-radio-debug.sh off`.
+- New `boot-ut.img` SHA256 `0fa70b9792f531e643521d09441553e9a260efaf001fb5633ba21033d444166e` (kernel `#9`). Not yet written. Once written, delete `~/.config/systemd/user/media-hub.service.d/` and the five copies left in `~/.config/stone/` (`call-audio*.sh`, `ctl-write.py`, `voice-pcm-hold.py`, `media-hub-server`). They are only there for the live session before the flash.
+- The user wrote `0fa70b97…` and ran `stone-radio-debug.sh off`. `getprop persist.vendor.radio.adb_log_on` is `0`. The exit code 129 was SIGHUP when `adb shell -t` closed the terminal after the command finished, not a failure. After the flash, the home `media-hub.service.d/` and the five copies were deleted. `systemctl --user show media-hub` has ExecStart `/usr/lib/stone/media-hub-server` (SHA256 `c75069d1…`, the same as the verified one).
+- After the flash, the first call was choppy again on the far end. `stone-call-audio` (now the system unit) worked normally: `call audio on: earpiece, mic mono +14 dB`, with the scripts byte-for-byte the same as the repository. The difference: the unit has `PartOf=pulseaudio.service`. On every call, `lomiri-telephony-service-handler` logs "Setting up pulseaudio for voice call" and then `Found card that supports voicecall: 'droid_card.primary'`. It switches the profile to `voicecall`, and PulseAudio aborts on `pa_source_assert_ref()` (`status=6/ABRT`). This crash happened on every call in the previous boot too, including the one with good sound. But back then the watcher was a transient unit and was not restarted along with PulseAudio. Now every PulseAudio crash also stops the watcher (`ExecStopPost=call-audio.sh off`). At call start that is not a problem, but if it happens mid-call the call audio is cut.
+- `module-droid-card-28` can only load the 64-bit stub HAL. Its two sinks go nowhere, and its source cannot even be opened (`Failed to open input stream`). It has no option to drop the `voicecall` profile. Removed it from `etc/pulse/stone-touch.pa`, so the telephony service finds no voicecall card and does not touch PulseAudio. `stone-call-audio.service` no longer uses `PartOf=pulseaudio.service`.
+- It is not clear that the choppiness comes from this. Both the good and the bad calls had the crash, and the bad call's uplink was not recorded. Uplink level at +14 dB was RMS 554, peak 6326 (about -14 dBFS), which leaves little margin for the vocoder's VAD.
+- Test setup applied directly on the phone (no reflash): `pactl unload-module` on the droid card (lasts until PulseAudio restarts), `~/.config/stone/call-mic-gain` = `20`, and a temporary `~/.config/systemd/user/stone-call-audio.service.d/zz-debug-rec-ul.conf` (`STONE_CALL_REC_UL=1`). New `boot-ut.img` SHA256 `3b33787a7bec8e4f7009f40784f4464277f6ab003b08e70539c606763070d7a1` (without the droid card, without PartOf, default gain still +14). Not yet written. Decide the default gain after this test. Once it is decided, delete `call-mic-gain` and the debug drop-in.
+- The user confirmed this call (droid card unloaded, +20 dB) was "clear". There was no PulseAudio crash during the call. The uplink recording peaked at 10040 (-10.3 dBFS) with no clipping, and active speech was about -31.1 dBFS (for the comparison with +0 and +14, see "Call audio: what fixed it"). The recording is in `out/halium14/logs/call-audio-debug/stone-uplink-1794295468.raw`. The call lasted about 9 seconds, so the 8-second recording ends with a stretch of silence after the hang-up (p10 = 0).
+- The default gain was changed to +20 (`MIC_GAIN=20` in `call-audio.sh`). Deleted `~/.config/stone/call-mic-gain` and `~/.config/systemd/user/stone-call-audio.service.d/`, so there are no stone files left in phablet's home directory. Until the image is written, the `/usr/lib/stone/call-audio.sh` on the phone still defaults to +14.
+- New `boot-ut.img` SHA256 `4af37a0d26ce4892184fcef1d6c19bce8603e770423bf052f1337e709207ce21` (kernel `#9`; default +20 dB, no droid card, no PartOf, `stone-call-audio` enabled, removal list for the debug drop-in and the core-dump drop-in). This is the image to write next.
 
 ## 6. Bluetooth
 

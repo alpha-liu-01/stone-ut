@@ -88,9 +88,11 @@ mic_dual() {
 # -24 dBFS peaks, low enough for the vocoder's VAD/DTX to drop softer
 # syllables (the far end heard it chopping several times a second).
 # TX_DECn Volume is 1 dB/step, 84 = 0 dB (ADCn Volume is only 0.25 dB/step).
-# dB above 0, from ~/.config/stone/call-mic-gain, default 14.
+# dB above 0, from ~/.config/stone/call-mic-gain, default 20 (measured
+# uplink: +14 peaked at -14 dBFS and still chopped once; +20 peaks at -10
+# dBFS, active speech about -31 dBFS, no clipping, clear at the far end).
 MIC_GAIN=$(cat "${HOME}/.config/stone/call-mic-gain" 2>/dev/null)
-case "$MIC_GAIN" in ''|*[!0-9]*) MIC_GAIN=14 ;; esac
+case "$MIC_GAIN" in ''|*[!0-9]*) MIC_GAIN=20 ;; esac
 [ "$MIC_GAIN" -le 40 ] || MIC_GAIN=40
 
 mic_gain() {
