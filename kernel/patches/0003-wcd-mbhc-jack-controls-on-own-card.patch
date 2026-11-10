@@ -1,0 +1,86 @@
+diff --git a/techpack/audio/asoc/codecs/wcd-mbhc-v2.c b/techpack/audio/asoc/codecs/wcd-mbhc-v2.c
+index 0256f7dbd..208484dd5 100644
+--- a/techpack/audio/asoc/codecs/wcd-mbhc-v2.c
++++ b/techpack/audio/asoc/codecs/wcd-mbhc-v2.c
+@@ -21,6 +21,7 @@
+ #include <linux/usb/typec.h>
+ #include <sound/soc.h>
+ #include <sound/jack.h>
++#include <sound/initval.h>
+ #include <asoc/msm-cdc-pinctrl.h>
+ #include <asoc/wcdcal-hwdep.h>
+ #include "wcd-mbhc-legacy.h"
+@@ -30,10 +31,64 @@
+ struct mutex hphl_pa_lock;
+ struct mutex hphr_pa_lock;
+ 
++/*
++ * stone-ut: jack state for ALSA userspace (PulseAudio UCM "JackControl").
++ *
++ * The headset jack is only reported as an input device; the sound card has
++ * no "Headphone Jack" / "Headset Mic Jack" controls. Adding them to the main
++ * card does not help: alsa-lib's simple mixer, which PulseAudio needs to
++ * watch jack controls, refuses to load that card because ~100 vendor
++ * controls fail to read. So the jack controls live on a separate card that
++ * holds nothing else ("StoneJack"), mirrored from every headset report.
++ */
++static struct snd_card *stone_jack_card;
++static struct snd_jack *stone_jack;
++
++static void stone_jack_card_init(struct device *dev)
++{
++	struct snd_card *card;
++	struct snd_jack *jack;
++	int ret;
++
++	if (stone_jack_card)
++		return;
++	ret = snd_card_new(dev, SNDRV_DEFAULT_IDX1, "StoneJack", THIS_MODULE,
++			   0, &card);
++	if (ret) {
++		pr_err("%s: snd_card_new: %d\n", __func__, ret);
++		return;
++	}
++	strlcpy(card->driver, "StoneJack", sizeof(card->driver));
++	strlcpy(card->shortname, "Headset jack", sizeof(card->shortname));
++	strlcpy(card->longname, "Headset jack state (wcd-mbhc)",
++		sizeof(card->longname));
++	/* phantom: no second input device next to "Headset Jack" */
++	ret = snd_jack_new(card, "Headset", WCD_MBHC_JACK_MASK, &jack,
++			   false, true);
++	if (!ret)
++		ret = snd_jack_add_new_kctl(jack, "Headphone",
++					    SND_JACK_HEADPHONE |
++					    SND_JACK_LINEOUT);
++	if (!ret)
++		ret = snd_jack_add_new_kctl(jack, "Headset Mic",
++					    SND_JACK_MICROPHONE);
++	if (!ret)
++		ret = snd_card_register(card);
++	if (ret) {
++		pr_err("%s: %d\n", __func__, ret);
++		snd_card_free(card);
++		return;
++	}
++	stone_jack_card = card;
++	stone_jack = jack;
++}
++
+ void wcd_mbhc_jack_report(struct wcd_mbhc *mbhc,
+ 			  struct snd_soc_jack *jack, int status, int mask)
+ {
+ 	snd_soc_jack_report(jack, status, mask);
++	if (stone_jack && jack == &mbhc->headset_jack)
++		snd_jack_report(stone_jack, jack->status);
+ }
+ EXPORT_SYMBOL(wcd_mbhc_jack_report);
+ 
+@@ -1904,6 +1959,8 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_component *component,
+ 			return ret;
+ 		}
+ 
++		stone_jack_card_init(component->dev);
++
+ 		INIT_DELAYED_WORK(&mbhc->mbhc_firmware_dwork,
+ 				  wcd_mbhc_fw_read);
+ 		INIT_DELAYED_WORK(&mbhc->mbhc_btn_dwork, wcd_btn_lpress_fn);

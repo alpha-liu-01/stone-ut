@@ -1,0 +1,6 @@
+# The stock 85-android.rules hides "card0" from PulseAudio (on droid devices
+# it is the built-in card, which module-droid handles). Here the built-in card
+# is loaded by /etc/pulse/stone-touch.pa by id, and a USB audio card present
+# at boot could end up as card 0 (the kernel command line keeps it off slot 0
+# with snd_usb_audio.index, this is the backstop). Never hide a USB card.
+SUBSYSTEM=="sound", KERNEL=="card*", SUBSYSTEMS=="usb", ENV{PULSE_IGNORE}=""

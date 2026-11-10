@@ -18,7 +18,10 @@ chmod 755 "$STAGE/root/bin/busybox"
 MODE=${1:-boot}
 # The vendor_boot cmdline ends in "ro"; systemd would remount / read-only.
 # Halium runs Android without SELinux policy; UT confines apps with AppArmor.
-CMDLINE="rw splash selinux=0 security=apparmor apparmor=1"
+# snd_usb_audio.index: -2 is a slot mask without slot 0, so a USB audio card
+# present at boot never takes card 0 from the built-in card (that one
+# registers later, around 14 s).
+CMDLINE="rw splash selinux=0 security=apparmor apparmor=1 snd_usb_audio.index=-2,-2,-2,-2,-2,-2,-2,-2"
 case "$MODE" in
     boot) INIT_SRC="$ROOT/boot/ut-init/init"; BOOT_OUT="$OUT/boot-ut.img"; COMPRESS=lz4 ;;
     trace) INIT_SRC="$ROOT/boot/ut-init/init"; BOOT_OUT="$OUT/boot-ut-trace.img"; COMPRESS=lz4

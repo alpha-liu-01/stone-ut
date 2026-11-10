@@ -1,17 +1,19 @@
 #!/bin/sh
 # Voice call session primitives, used by call-audio-router.py.
 #
-# The routing (earpiece/speaker/Bluetooth, uplink mic, gain) is not here: it
+# The routing (earpiece/speaker/headphones/Bluetooth, uplink mic, gain) is not here: it
 # is the UCM profile /usr/share/stone/ucm2/stone/HiFi.conf, applied by
 # PulseAudio when lomiri-telephony-service switches the sink.primary port.
 # What the vendor HAL would still do on top of its mixer paths is here:
-# hold the hostless VoiceMMode1 PCM (hw:0,2) open in both directions, which
+# hold the hostless VoiceMMode1 PCM (device 2) open in both directions, which
 # makes msm-pcm-voice start the voice session, and send the mute controls.
 #
 # usage: call-audio.sh on [muted] | off | mute 0|1 | gain DB
-#        call-audio.sh route earpiece|speaker|bluetooth   (debug)
+#        call-audio.sh route earpiece|speaker|bluetooth|headphones|headset|usb
+#                                                          (debug)
 #        call-audio.sh rec-ul [secs] [file]               (debug)
-CARD=0
+# By id, not number: a USB audio card present at boot can take any slot.
+CARD=holiqrdsku1sndc
 PIDS=${XDG_RUNTIME_DIR:-/tmp}/stone-call-audio.pids
 DIR=$(dirname "$0")
 
@@ -69,7 +71,10 @@ case "$1" in
             earpiece) p='[Out] Earpiece'; s='[In] Mic' ;;
             speaker) p='[Out] Speaker'; s='[In] Mic' ;;
             bluetooth) p='[Out] Bluetooth'; s='[In] BluetoothMic' ;;
-            *) echo "usage: $0 route earpiece|speaker|bluetooth" >&2; exit 1 ;;
+            headphones) p='[Out] Headphones'; s='[In] Mic' ;;
+            headset) p='[Out] Headphones'; s='[In] Headset' ;;
+            usb) p='[Out] USB'; s='[In] Mic' ;;
+            *) echo "usage: $0 route earpiece|speaker|bluetooth|headphones|headset|usb" >&2; exit 1 ;;
         esac
         pactl set-sink-port sink.primary "$p" && pactl set-source-port source.primary "$s"
         ;;

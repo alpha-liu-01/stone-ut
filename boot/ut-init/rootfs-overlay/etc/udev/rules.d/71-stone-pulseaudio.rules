@@ -3,3 +3,7 @@
 # second card on the same device (with ALSA_CONFIG_UCM2 set it would find
 # the same profile).
 SUBSYSTEM=="sound", KERNEL=="card*", ATTR{id}=="holiqrdsku1sndc", ENV{PULSE_IGNORE}="1"
+# "StoneJack" only carries the 3.5 mm jack state for the UCM profile above
+# (JackCTL "hw:StoneJack"); it has no PCMs, so it is not a sound card for
+# PulseAudio.
+SUBSYSTEM=="sound", KERNEL=="card*", ATTR{id}=="StoneJack", ENV{PULSE_IGNORE}="1"

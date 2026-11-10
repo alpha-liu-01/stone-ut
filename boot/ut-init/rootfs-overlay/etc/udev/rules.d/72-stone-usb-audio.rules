@@ -1,0 +1,14 @@
+# Keep the "USB Jack"/"USB Mic Jack" controls on the StoneJack card and the
+# DSP's USB back ends (USB_AUDIO_RX/TX) in step with the USB audio devices
+# plugged in, so calls can be routed to them. See
+# /usr/lib/stone/usb-audio-jack.py.
+#
+# On the control devices, not the cards: a card's "add" comes before its
+# controlC node exists. The helper needs both the built-in card and StoneJack
+# (StoneJack appears in the middle of the built-in card's setup, before the
+# built-in controls), so it runs when each of them is ready and when a USB
+# card comes; whichever is last finds everything. A USB headset plugged in at
+# boot is seen at about 3 s, the built-in card at about 14 s.
+SUBSYSTEM=="sound", KERNEL=="controlC*", ACTION=="add", ATTRS{id}=="holiqrdsku1sndc|StoneJack", RUN+="/usr/lib/stone/usb-audio-jack.py"
+SUBSYSTEM=="sound", KERNEL=="controlC*", ACTION=="add", SUBSYSTEMS=="usb", RUN+="/usr/lib/stone/usb-audio-jack.py"
+SUBSYSTEM=="sound", KERNEL=="card*", ACTION=="remove", RUN+="/usr/lib/stone/usb-audio-jack.py --removed %k"

@@ -12,7 +12,7 @@ import ctypes
 import sys
 
 args = sys.argv[1:]
-card = "hw:0"
+card = "hw:holiqrdsku1sndc"  # the built-in card, by id
 if args[:1] == ["-c"]:
     card = "hw:" + args[1]
     args = args[2:]

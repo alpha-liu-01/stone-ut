@@ -1,0 +1,99 @@
+diff --git a/sound/usb/usb_audio_qmi_svc.c b/sound/usb/usb_audio_qmi_svc.c
+index d72c2e650..987f324d3 100644
+--- a/sound/usb/usb_audio_qmi_svc.c
++++ b/sound/usb/usb_audio_qmi_svc.c
+@@ -28,6 +28,7 @@
+ #include "card.h"
+ #include "helper.h"
+ #include "pcm.h"
++#include "power.h"
+ #include "usb_audio_qmi_v01.h"
+ 
+ #define BUS_INTERVAL_FULL_SPEED 1000 /* in us */
+@@ -1082,6 +1083,7 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 
+ 	u8 pcm_card_num, pcm_dev_num, direction;
+ 	int info_idx = -EINVAL, datainterval = -EINVAL, ret = 0;
++	bool host_open = false, owned = false;
+ 
+ 	uaudio_dbg("sq_node:%x sq_port:%x sq_family:%x\n", sq->sq_node,
+ 			sq->sq_port, sq->sq_family);
+@@ -1139,6 +1141,15 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 		goto response;
+ 	}
+ 
++	/*
++	 * stone-ut: the host driver and the DSP share the substream. Never
++	 * take one the host has open (the DSP's set_format would move it under
++	 * the running host stream), and on disable only touch the hardware
++	 * when the offload owns the interface: snd_usb_enable_audio_stream(0)
++	 * selects altset 0 and the endpoints get stopped, which silences a
++	 * host stream opened in the meantime until it is closed and reopened.
++	 */
++	host_open = subs->pcm_substream != NULL;
+ 	if (req_msg->enable) {
+ 		if (info_idx < 0) {
+ 			uaudio_err("interface# %d already in use card# %d\n",
+@@ -1147,6 +1158,23 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 			mutex_unlock(&chip->dev_lock);
+ 			goto response;
+ 		}
++		if (host_open) {
++			uaudio_err("card# %u dev# %u dir %u open by the host, not offloading\n",
++					pcm_card_num, pcm_dev_num, direction);
++			ret = -EBUSY;
++			mutex_unlock(&chip->dev_lock);
++			goto response;
++		}
++	} else {
++		owned = info_idx >= 0 && uadev[pcm_card_num].info &&
++			uadev[pcm_card_num].info[info_idx].in_use;
++		if (!owned) {
++			uaudio_dbg("card# %u dir %u not offloaded, nothing to disable\n",
++					pcm_card_num, direction);
++			ret = 0;
++			mutex_unlock(&chip->dev_lock);
++			goto response;
++		}
+ 	}
+ 
+ 	subs->pcm_format = map_pcm_format(req_msg->audio_format);
+@@ -1168,7 +1196,7 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 
+ 	uadev[pcm_card_num].ctrl_intf = chip->ctrl_intf;
+ 
+-	if (!req_msg->enable) {
++	if (!req_msg->enable && !host_open) {
+ 		info = &uadev[pcm_card_num].info[info_idx];
+ 		if (info->data_ep_pipe) {
+ 			ep = usb_pipe_endpoint(uadev[pcm_card_num].udev,
+@@ -1193,7 +1221,19 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 		}
+ 	}
+ 
+-	ret = snd_usb_enable_audio_stream(subs, datainterval, req_msg->enable);
++	if (!req_msg->enable && host_open) {
++		/* the host stream owns the hardware now; only drop our resources */
++		uaudio_dbg("card# %u dir %u: host reopened it, leaving the interface\n",
++				pcm_card_num, direction);
++		info = &uadev[pcm_card_num].info[info_idx];
++		info->data_ep_pipe = 0;
++		info->sync_ep_pipe = 0;
++		snd_usb_autosuspend(subs->stream->chip);
++		ret = 0;
++	} else {
++		ret = snd_usb_enable_audio_stream(subs, datainterval,
++						  req_msg->enable);
++	}
+ 
+ 	if (!ret && req_msg->enable)
+ 		ret = prepare_qmi_response(subs, req_msg, &resp, info_idx);
+@@ -1201,7 +1241,7 @@ static void handle_uaudio_stream_req(struct qmi_handle *handle,
+ 	mutex_unlock(&chip->dev_lock);
+ 
+ response:
+-	if (!req_msg->enable && ret != -EINVAL && ret != -ENODEV) {
++	if (!req_msg->enable && owned && ret != -EINVAL && ret != -ENODEV) {
+ 		mutex_lock(&chip->dev_lock);
+ 		if (info_idx >= 0) {
+ 			info = &uadev[pcm_card_num].info[info_idx];

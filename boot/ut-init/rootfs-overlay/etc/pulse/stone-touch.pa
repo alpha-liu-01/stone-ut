@@ -157,7 +157,7 @@ load-module module-filter-apply
 ### mode (mmap=0) blocks in msm_pcm_copy and stalls the sink.
 ### udev-detect ignores this card (71-stone-pulseaudio.rules).
 .nofail
-load-module module-alsa-card device_id=0 use_ucm=1 name=primary card_name=alsa_card.stone sink_name=sink.primary source_name=source.primary rate=48000 tsched=0 fragments=4 fragment_size=1920 sink_properties="device.description='Built-in audio'" source_properties="device.description='Built-in microphone'"
+load-module module-alsa-card device_id=holiqrdsku1sndc use_ucm=1 name=primary card_name=alsa_card.stone sink_name=sink.primary source_name=source.primary rate=48000 tsched=0 fragments=4 fragment_size=1920 sink_properties="device.description='Built-in audio'" source_properties="device.description='Built-in microphone'"
 set-default-sink sink.primary
 set-default-source source.primary
 .fail

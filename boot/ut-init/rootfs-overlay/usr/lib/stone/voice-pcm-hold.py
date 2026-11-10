@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Open the VoiceMMode1 front end (hw:0,2) in both directions, start it,
+"""Open the VoiceMMode1 front end (hw:holiqrdsku1sndc,2) in both directions, start it,
 and hold it until SIGTERM. Never read or write samples.
 
 msm-pcm-voice-v2 is hostless: it has no .copy or .pointer op and no DMA
@@ -11,13 +11,13 @@ panic_on_oops -> the phone resets.
 Once both directions are prepared, msm_pcm_prepare() calls
 voc_start_voice_call() for the VoiceMMode1 session.
 
-usage: voice-pcm-hold.py [DEVICE]   (default hw:0,2)
+usage: voice-pcm-hold.py [DEVICE]   (default hw:holiqrdsku1sndc,2)
 """
 import ctypes
 import signal
 import sys
 
-DEVICE = (sys.argv[1] if len(sys.argv) > 1 else "hw:0,2").encode()
+DEVICE = (sys.argv[1] if len(sys.argv) > 1 else "hw:holiqrdsku1sndc,2").encode()
 SND_PCM_STREAM_PLAYBACK, SND_PCM_STREAM_CAPTURE = 0, 1
 SND_PCM_FORMAT_S16_LE = 2
 SND_PCM_ACCESS_RW_INTERLEAVED = 3

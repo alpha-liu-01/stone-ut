@@ -3,9 +3,9 @@
 
 Who decides what:
 - lomiri-telephony-service picks the call output (earpiece by default,
-  speaker or Bluetooth from the dialer's audio button, Bluetooth on its own
-  when a headset is connected) and switches the sink.primary/source.primary
-  ports.
+  speaker or Bluetooth from the dialer's audio button, the 3.5 mm headset or
+  Bluetooth on their own when connected) and switches the
+  sink.primary/source.primary ports.
 - PulseAudio applies that port's routing from the UCM profile
   /usr/share/stone/ucm2/stone/HiFi.conf.
 - This daemon does what the vendor audio HAL would do on top of that:
@@ -17,7 +17,15 @@ Who decides what:
     PulseAudio bluez module only opens the SCO link to the headset while
     the fake SCO sink or source is in use ("SCO over PCM"; the audio itself
     runs over SLIMbus). The BT chip only appears on SLIMbus while that link
-    is up, so the link has to exist before the voice session starts.
+    is up, so the link has to exist before the voice session starts;
+  * while sink.primary is on the USB port (calls played by the DSP through
+    USB audio offload), keep PulseAudio's own USB sink and source suspended
+    so the DSP can take the device; outside calls move sink.primary off that
+    port
+    (telephony-service leaves it there after a call), and make a USB card
+    present at PulseAudio startup the default, see prefer_usb_defaults();
+  * if the 3.5 mm jack state is missing (no StoneJack card), keep calls and
+    media off the Headphones port, see no_jack().
 
 Event driven (ofono D-Bus signals, pactl subscribe), so it costs nothing
 while idle. Debug: STONE_CALL_REC_UL=1 records 8 s of the uplink per call.
@@ -36,6 +44,12 @@ CTL = os.environ.get("STONE_CALL_AUDIO", "/usr/lib/stone/call-audio.sh")
 SINK = "sink.primary"
 SOURCE = "source.primary"
 BT_PORT = "[Out] Bluetooth"
+HP_PORT = "[Out] Headphones"
+USB_PORT = "[Out] USB"
+USB_MIC_PORT = "[In] USBMic"
+# PulseAudio's own sinks/sources on USB audio cards (module-udev-detect).
+USB_SINK_PREFIX = "alsa_output.usb-"
+USB_SOURCE_PREFIX = "alsa_input.usb-"
 FAKE_SCO_SOURCE = "source.fake.sco"
 MODEMS = ("/ril_0", "/ril_1")
 # The voice path is needed for ringback (alerting) and the call itself. An
@@ -51,6 +65,9 @@ GAIN_FILE = os.path.expanduser("~/.config/stone/call-mic-gain")
 # UCM card failed to load; see speaker_fallback().
 FALLBACK_AFTER_S = 10
 FALLBACK_SINK = "sink.speaker"
+# The built-in card, by id: a USB audio card present at boot can take any
+# slot (the kernel command line keeps USB off slot 0, but do not rely on it).
+MAIN_CARD = "hw:holiqrdsku1sndc"
 UCM_ENV = dict(os.environ, ALSA_CONFIG_UCM2=os.environ.get(
     "ALSA_CONFIG_UCM2", "/usr/share/stone/ucm2"))
 
@@ -84,6 +101,15 @@ class Router:
         self.eval_timer = None
         self.fallback_timer = None
         self.fallback = False
+        self.jack_warned = False
+        self.usb_devs = set()     # ("sink"|"source", name) of PA's USB card
+        self.usb_held = set()     # those suspended by us
+        self.sink_avail = {}      # sink.primary port -> availability
+        self.src_port = None      # source.primary active port
+        self.src_avail = {}
+        self.defaults_checked = False
+        self.had_calls = False
+        self.post_call_until = 0.0  # see prefer_usb_defaults()
 
         self.bus.add_signal_receiver(
             self.on_call_added, "CallAdded", "org.ofono.VoiceCallManager",
@@ -142,6 +168,7 @@ class Router:
             return
         GLib.io_add_watch(self.sub.stdout.fileno(), GLib.PRIORITY_DEFAULT,
                           GLib.IO_IN | GLib.IO_HUP, self.on_pa_event)
+        self.defaults_checked = False
         self.schedule_read_pa()
 
     def on_pa_event(self, fd, cond):
@@ -168,23 +195,113 @@ class Router:
         self.pa_timer = None
         port, mute = None, False
         try:
-            for s in pactl_json("list", "sinks"):
+            sinks = pactl_json("list", "sinks")
+            sources = pactl_json("list", "sources")
+            self.usb_devs = \
+                {("sink", s.get("name")) for s in sinks
+                 if s.get("name", "").startswith(USB_SINK_PREFIX)} | \
+                {("source", s.get("name")) for s in sources
+                 if s.get("name", "").startswith(USB_SOURCE_PREFIX)}
+            for s in sinks:
                 if s.get("name") == SINK:
                     port = s.get("active_port")
-            for s in pactl_json("list", "sources"):
+                    self.sink_avail = {p.get("name"): p.get("availability")
+                                       for p in s.get("ports", [])}
+            for s in sources:
                 if s.get("name") == SOURCE:
                     mute = bool(s.get("mute"))
+                    self.src_port = s.get("active_port")
+                    self.src_avail = {p.get("name"): p.get("availability")
+                                      for p in s.get("ports", [])}
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             log("pulseaudio not readable: %s" % e)
+            return False
+        hp_avail = self.sink_avail.get(HP_PORT)
         if port != self.port:
             log("route: %s -> %s" % (self.port, port))
             self.port, self.port_since = port, time.monotonic()
         self.src_mute = mute
+        if hp_avail == "availability unknown" and self.no_jack(port):
+            return False  # port switch requested; its event brings us back
         if port is None and self.fallback_timer is None and not self.fallback:
             self.fallback_timer = GLib.timeout_add_seconds(
                 FALLBACK_AFTER_S, self.speaker_fallback)
+        if not self.defaults_checked and port is not None:
+            self.defaults_checked = True
+            self.prefer_usb_defaults("present at startup")
+        elif not self.calls and time.monotonic() < self.post_call_until:
+            self.prefer_usb_defaults("after the call")
         self.evaluate()
         return False
+
+    def prefer_usb_defaults(self, why):
+        """Make a USB card the default where switch-on-connect cannot.
+
+        - At PulseAudio startup: stone-touch.pa sets sink.primary/
+          source.primary as defaults after module-udev-detect has added any
+          USB card, and module-switch-on-connect does nothing during startup.
+        - Shortly after a call: telephony-service restores the defaults it
+          saved when the call began, which were the built-in ones if the
+          USB headset was plugged in during the call.
+        A USB card plugged in at other times becomes the default through
+        switch-on-connect as usual. Not during calls (telephony-service
+        manages the defaults then)."""
+        if self.calls:
+            return
+        for kind, ours in (("sink", SINK), ("source", SOURCE)):
+            usb = sorted(n for k, n in self.usb_devs if k == kind)
+            if not usb:
+                continue
+            cur = subprocess.run(["pactl", "get-default-" + kind],
+                                 capture_output=True, text=True).stdout.strip()
+            if cur == ours:
+                log("default %s: %s -> %s (%s)" % (kind, cur, usb[0], why))
+                subprocess.run(["pactl", "set-default-" + kind, usb[0]])
+
+    def leave_usb_port(self):
+        """Move sink.primary/source.primary off the USB ports outside calls.
+
+        telephony-service selects the "wired" output when a call ends and at
+        startup, which here is the DSP's USB route. Outside calls media for
+        the USB device goes through PulseAudio's own USB card, and an idle
+        DSP USB route must not compete with it for the device. Back to the
+        best other port (3.5 mm if plugged, else the built-in ones).
+        Returns True if a switch was requested."""
+        moved = False
+        if self.port == USB_PORT:
+            out = HP_PORT if self.sink_avail.get(HP_PORT) == "available" \
+                else "[Out] Speaker"
+            log("route: no call, leaving %s for %s" % (USB_PORT, out))
+            subprocess.run(["pactl", "set-sink-port", SINK, out])
+            moved = True
+        if self.src_port == USB_MIC_PORT:
+            mic = "[In] Headset" \
+                if self.src_avail.get("[In] Headset") == "available" \
+                else "[In] Mic"
+            subprocess.run(["pactl", "set-source-port", SOURCE, mic])
+            moved = True
+        return moved
+
+    def no_jack(self, port):
+        """The 3.5 mm jack state is missing (no "StoneJack" card).
+
+        PulseAudio then treats the Headphones port as possibly connected:
+        being the highest priority it picks it at startup (the speaker goes
+        silent) and telephony-service routes every call to it. Move off it
+        whenever it gets selected. Returns True if a switch was requested."""
+        if not self.jack_warned:
+            self.jack_warned = True
+            log("ERROR: no 3.5 mm jack detection (%s availability unknown; "
+                "is the StoneJack card missing?); keeping calls and media "
+                "off the headphones" % HP_PORT)
+        if port != HP_PORT:
+            return False
+        in_call = any(s in VOICE_STATES for s in self.calls.values())
+        out = "[Out] Earpiece" if in_call else "[Out] Speaker"
+        log("route: leaving %s for %s" % (HP_PORT, out))
+        subprocess.run(["pactl", "set-sink-port", SINK, out])
+        subprocess.run(["pactl", "set-source-port", SOURCE, "[In] Mic"])
+        return True
 
     def speaker_fallback(self):
         """Last resort if PulseAudio could not load the UCM card.
@@ -205,7 +322,7 @@ class Router:
         log("ERROR: no %s (UCM card failed to load, see the pulseaudio log); "
             "falling back to %s without call routes" % (SINK, FALLBACK_SINK))
         self.fallback = True
-        subprocess.run(["alsaucm", "-c", "hw:0", "set", "_verb", "HiFi",
+        subprocess.run(["alsaucm", "-c", MAIN_CARD, "set", "_verb", "Voice Call",
                         "set", "_enadev", "Speaker"], env=UCM_ENV)
         subprocess.run(["pactl", "load-module", "module-alsa-sink",
                         "device=stone_mm5", "sink_name=" + FALLBACK_SINK,
@@ -229,12 +346,33 @@ class Router:
             self.sco.wait()
             self.sco = None
 
+    def hold_usb(self, want):
+        """Release PulseAudio's USB card while a call uses the USB route.
+
+        On "[Out] USB" the DSP plays to (and with "[In] USB" records from)
+        the USB device itself (offload); the kernel only hands it the
+        endpoints while the host driver has the streams closed (the kernel
+        refuses otherwise, kernel/patches/0004), so PulseAudio's own sink
+        and source for that card stay suspended while the port is selected
+        (the sink may still be open from the ringtone). Outside calls the
+        port is left at once, see leave_usb_port(): that sink is where media
+        for the device plays."""
+        target = set(self.usb_devs) if want else set()
+        for kind, name in sorted(target - self.usb_held):
+            log("usb: suspending %s for the DSP route" % name)
+            subprocess.run(["pactl", "suspend-" + kind, name, "1"])
+        for kind, name in sorted(self.usb_held - target):
+            if (kind, name) in self.usb_devs:
+                log("usb: resuming %s" % name)
+                subprocess.run(["pactl", "suspend-" + kind, name, "0"])
+        self.usb_held = target
+
     def start(self):
         if self.port is None:
             # No PulseAudio sink: apply the same UCM profile directly so a
             # call still has audio (earpiece).
             log("no %s; enabling UCM Earpiece directly" % SINK)
-            subprocess.run(["alsaucm", "-c", "hw:0", "set", "_verb", "HiFi",
+            subprocess.run(["alsaucm", "-c", MAIN_CARD, "set", "_verb", "Voice Call",
                             "set", "_enadev", "Earpiece"], env=UCM_ENV)
         subprocess.run([CTL, "on"] + (["muted"] if self.src_mute else []))
         try:
@@ -261,7 +399,23 @@ class Router:
         now = time.monotonic()
         states = sorted(self.calls.values())
         want = any(s in VOICE_STATES for s in states)
+        if self.calls:
+            self.had_calls = True
+        elif self.had_calls:
+            # telephony-service restores its saved defaults about 2 s after
+            # the call; that change comes back here through read_pa().
+            self.had_calls = False
+            self.post_call_until = now + 15
         self.hold_sco(self.port == BT_PORT)
+        # Whenever sink.primary is on the USB port, not only in calls:
+        # PulseAudio applies the route the moment telephony-service selects
+        # it (at startup, ringing and hang-up too), and anything playing on
+        # sink.primary then makes the DSP take the device. The host stream
+        # must be closed by then. Outside calls leave_usb_port() moves off
+        # the port right away, so this lasts only a moment.
+        self.hold_usb(self.port == USB_PORT)
+        if not self.calls and self.leave_usb_port():
+            return False  # its port event brings us back
 
         if not want:
             if self.call_since is not None:
@@ -296,6 +450,7 @@ class Router:
         if self.session:
             self.stop()
         self.hold_sco(False)
+        self.hold_usb(False)
         if self.sub and self.sub.poll() is None:
             self.sub.terminate()
         self.loop.quit()
