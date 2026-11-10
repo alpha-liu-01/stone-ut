@@ -1,283 +1,284 @@
-# Halium 14 与 Ubuntu Touch 24.04
+# Halium 14 and Ubuntu Touch 24.04
 
-让 vendor 和容器里的 Halium 系统镜像在 Android 14 对齐。Linux 根文件系统用 Ubuntu Touch 24.04-2.x。Droidian 101 和 2026-10-07 的 nightly 没有发布 api34 通用根文件系统，这一篇不用 Droidian。
 
-手机此刻仍在跑 `docs/roadmap-04-05.md` 末尾的 Droidian Phosh（内核 DRM，USB 网络上可以 SSH）。本篇在第 6 项之前不重启、不写分区、不格式化 userdata。第 6 项要看屏幕，执行到那里就停下。
+Align the vendor and the Halium system image inside the container on Android 14. The Linux root filesystem is Ubuntu Touch 24.04-2.x. Droidian 101 and the 2026-10-07 nightly did not publish a generic api34 root filesystem, so this document does not use Droidian.
 
-## 决定
+The phone is still running the Droidian Phosh from the end of `docs/roadmap-04-05.md` (kernel DRM, SSH over USB networking). Until item 6, this document does not reboot, write partitions, or format userdata. Item 6 needs someone looking at the screen. Stop when execution reaches it.
 
-- 停在 Droidian api32 的 `android-rootfs.img`。那份镜像是 Halium 12，配这台机器上的 Android 16 vendor 时，vendor 进程在进 init 之前就因 LL-NDK 对不上而退出。显示 HAL 仍是 HIDL Composer 2.4，libhybris 还没有被执行到。
-- vendor 用已经放在工作区里的 `third_party/crDroidAndroid-14.0-20241212-stone-v10.11.zip`。OTA 断言是 `pre-device=moonstone,sunstone,stone`，可以装到这台 sunstone。指纹 `POCO/moonstone_p_global` 是这棵统一 `stone` 树的编译产品名。`post-sdk-level=34`，安全补丁 2024-12-01。
-- 容器系统镜像用 UBports CI 的 Halium 14 arm64 通用包。`Halium/android` 的 `halium-14.0` 分支在 2026-05-18 仍有更新，移植脚本从 2025-04 起带有这个产物的地址。
-- 根文件系统用 Ubuntu Touch 24.04-2.x。UBports 的 `prepare-fake-ota.sh` 把根文件系统和 Halium 版本分开选：24.04-2.x 对应 `ubuntu-touch-android9plus-rootfs-arm64.tar.gz`，Halium 14 对应另一份 `halium_halium_arm64.tar.xz`。文件名里的 android9plus 是渠道的历史名字。
-- 内核用 `crdroidandroid/android_kernel_xiaomi_sm6375` 的 `14.0`，提交 `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`。`crdroidandroid/android_kernel_xiaomi_stone` 现在只发布 `16.0`。正在运行的内核来自那棵 16.0 树，留给上一篇，这一篇不覆盖 `kernel/build/`。
-- 刷入这份 zip 会替换 `super` 里的 crDroid 16。工作区没有 crDroid 12.9 的完整安装包。`backups/2026-11-09-crdroid-12.9/` 只能写回启动分区。
+## Decisions
 
-产物、内核树和压缩包放在 gitignore 的目录里，不提交。
+- Stop using Droidian api32's `android-rootfs.img`. That image is Halium 12. Paired with the Android 16 vendor on this machine, vendor processes exit before they reach init because the LL-NDK does not match. The display HAL is still HIDL Composer 2.4. libhybris has not been reached yet.
+- Vendor uses `third_party/crDroidAndroid-14.0-20241212-stone-v10.11.zip`, already in the workspace. The OTA assertion is `pre-device=moonstone,sunstone,stone`, so it can be installed on this sunstone. The fingerprint `POCO/moonstone_p_global` is the build product name of this unified `stone` tree. `post-sdk-level=34`, security patch 2024-12-01.
+- The container system image uses UBports CI's generic Halium 14 arm64 package. The `halium-14.0` branch of `Halium/android` was still updated on 2026-05-18, and the porting scripts have carried this artifact's URL since 2025-04.
+- The root filesystem is Ubuntu Touch 24.04-2.x. UBports' `prepare-fake-ota.sh` picks the root filesystem and the Halium version separately: 24.04-2.x corresponds to `ubuntu-touch-android9plus-rootfs-arm64.tar.gz`, and Halium 14 corresponds to a separate `halium_halium_arm64.tar.xz`. The android9plus in the filename is the channel's historical name.
+- The kernel is `crdroidandroid/android_kernel_xiaomi_sm6375` branch `14.0`, commit `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`. `crdroidandroid/android_kernel_xiaomi_stone` now publishes only `16.0`. The running kernel comes from that 16.0 tree and stays with the previous document. This document does not overwrite `kernel/build/`.
+- Flashing this zip replaces crDroid 16 inside `super`. The workspace has no complete crDroid 12.9 install package. `backups/2026-11-09-crdroid-12.9/` can only write boot partitions back.
 
-## 1. 确认三件套还能下载
+Build products, the kernel tree, and the archives live in gitignored directories and are not committed.
 
-目标：在下载大文件之前，确认 Jenkins 上的 Halium 14 产物、Ubuntu Touch 24.04-2.x 根文件系统，以及 Android 14 内核分支都还在。
+## 1. Confirm the three pieces can still be downloaded
 
-### 计划步骤
+Goal: before downloading large files, confirm that the Halium 14 artifact, the Ubuntu Touch 24.04-2.x root filesystem, and the Android 14 kernel branch are still on Jenkins.
 
-1. 请求下面两个地址的 HTTP 头。任一地址 404 就停在这一项，不改用别的版本碰运气。
+### Planned steps
+
+1. Request the HTTP headers of the two URLs below. If either is 404, stop at this item. Do not switch to some other version and hope.
    - `https://ci.ubports.com/job/UBportsCommunityPortsJenkinsCI/job/ubports%252Fporting%252Fcommunity-ports%252Fjenkins-ci%252Fgeneric_arm64/job/halium-14.0/lastSuccessfulBuild/artifact/halium_halium_arm64.tar.xz`
    - `https://ci.ubports.com/job/ubuntu-touch-rootfs/job/ubports%252F24.04-2.x/lastSuccessfulBuild/artifact/ubuntu-touch-android9plus-rootfs-arm64.tar.gz`
-2. 记下最终跳转到的文件名和 `Content-Length`。
-3. 再确认 `android_kernel_xiaomi_sm6375` 的 `14.0` 仍指向 `42e99ef7`。
+2. Record the final redirected filename and `Content-Length`.
+3. Confirm again that `14.0` of `android_kernel_xiaomi_sm6375` still points at `42e99ef7`.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 两个地址都直接返回 HTTP 200，没有跳转。
+2026-11-09: both URLs returned HTTP 200 directly, with no redirect.
 
-- Halium 14：`halium_halium_arm64.tar.xz`，`Content-Length` 144311736，`Content-Type` `application/x-xz`。
-- Ubuntu Touch 24.04-2.x：`ubuntu-touch-android9plus-rootfs-arm64.tar.gz`，`Content-Length` 971702706，`Content-Type` `application/gzip`。
-- `android_kernel_xiaomi_sm6375` 的 `14.0` 仍是 `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`。
+- Halium 14: `halium_halium_arm64.tar.xz`, `Content-Length` 144311736, `Content-Type` `application/x-xz`.
+- Ubuntu Touch 24.04-2.x: `ubuntu-touch-android9plus-rootfs-arm64.tar.gz`, `Content-Length` 971702706, `Content-Type` `application/gzip`.
+- `14.0` of `android_kernel_xiaomi_sm6375` is still `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`.
 
-### 事件
+### Events
 
-- 请求两个 CI 产物的 HTTP 头，都是 200。
-- 再次读取内核远程分支，提交没有变。
+- Requested the HTTP headers of both CI artifacts. Both were 200.
+- Read the kernel remote branch again. The commit had not changed.
 
-## 2. 下载 Halium 14 系统镜像和 Ubuntu Touch 根文件系统
+## 2. Download the Halium 14 system image and the Ubuntu Touch root filesystem
 
-目标：把两个压缩包放到 `third_party/halium14/`，确认一个是 Android 14 的系统镜像，一个是 Ubuntu 24.04 的根文件系统。
+Goal: put both archives in `third_party/halium14/`, and confirm that one is an Android 14 system image and the other is an Ubuntu 24.04 root filesystem.
 
-### 计划步骤
+### Planned steps
 
-1. 下载第 1 项记下的两个文件。目录已在 `.gitignore`。
-2. 计算 SHA256。
-3. 列出压缩包内容。系统镜像里读 `ro.build.version.sdk` 和 `ro.build.version.release`。根文件系统里读 `/etc/os-release`。
-4. 记下安装布局：系统镜像和根文件系统各是什么文件名，第 6 项要按这个布局写刷写步骤。
+1. Download the two files recorded in item 1. The directory is already in `.gitignore`.
+2. Compute SHA256.
+3. List the archive contents. From the system image, read `ro.build.version.sdk` and `ro.build.version.release`. From the root filesystem, read `/etc/os-release`.
+4. Record the install layout: the filename of the system image and of the root filesystem. Item 6 writes the flash steps from this layout.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 两个文件都下到 `third_party/halium14/`，不进 git。
+2026-11-09: both files were downloaded to `third_party/halium14/`, not into git.
 
-- `halium_halium_arm64.tar.xz`，144311736 字节，SHA256 `1b1b42138618e34db740f324653b390dd69e067450f9fc453290fdf323c4915e`。包里只有 `system/var/lib/lxc/android/android-rootfs.img`（453488640 字节，ext4）。镜像内 `system/build.prop` 是 `lineage_halium_arm64-userdebug 14 AP2A.240905.003`，`ro.build.version.sdk=34`，`ro.build.version.release=14`。
-- `ubuntu-touch-android9plus-rootfs-arm64.tar.gz`，971702706 字节，SHA256 `ec130c13231b5562e4ce360d555f1aee5769275b7c3b8eae9f89bfc03ec92562`。`/usr/lib/os-release` 是 Ubuntu 24.04.5 LTS，`VARIANT=Touch`，`VERSION_CODENAME=noble`。`/etc/os-release` 指向这个文件。压缩包来自 24.04-2.x 的 CI 任务。根文件系统顶层已经有 `android/`、`userdata/`、`system` 这些挂载点。
+- `halium_halium_arm64.tar.xz`, 144311736 bytes, SHA256 `1b1b42138618e34db740f324653b390dd69e067450f9fc453290fdf323c4915e`. The archive contains only `system/var/lib/lxc/android/android-rootfs.img` (453488640 bytes, ext4). `system/build.prop` inside the image is `lineage_halium_arm64-userdebug 14 AP2A.240905.003`, `ro.build.version.sdk=34`, `ro.build.version.release=14`.
+- `ubuntu-touch-android9plus-rootfs-arm64.tar.gz`, 971702706 bytes, SHA256 `ec130c13231b5562e4ce360d555f1aee5769275b7c3b8eae9f89bfc03ec92562`. `/usr/lib/os-release` is Ubuntu 24.04.5 LTS, `VARIANT=Touch`, `VERSION_CODENAME=noble`. `/etc/os-release` points at that file. The archive comes from the 24.04-2.x CI job. The top of the root filesystem already has the `android/`, `userdata/`, and `system` mount points.
 
-安装时，Halium 的 `android-rootfs.img` 落在根文件系统的 `/system/var/lib/lxc/android/android-rootfs.img`。Ubuntu 根文件系统单独展开。具体刷写命令留到第 6 项，这一项不写分区。
+At install time, Halium's `android-rootfs.img` lands at `/system/var/lib/lxc/android/android-rootfs.img` in the root filesystem. The Ubuntu root filesystem is unpacked on its own. The concrete flash commands wait until item 6. This item writes no partitions.
 
-### 事件
+### Events
 
-- 下载 Halium 14 通用包和 Ubuntu Touch 24.04-2.x 根文件系统。
-- 读出系统镜像的 SDK 34 / Android 14，以及根文件系统的 Ubuntu 24.04.5 Touch。
+- Downloaded the generic Halium 14 package and the Ubuntu Touch 24.04-2.x root filesystem.
+- Read SDK 34 / Android 14 from the system image, and Ubuntu 24.04.5 Touch from the root filesystem.
 
-## 3. 取出 Android 14 内核并核对面板
+## 3. Take the Android 14 kernel and check the panel
 
-目标：浅克隆 `14.0`，确认它仍用 `moonstone_defconfig`，并且设备树里有这台机器的 m17 面板。不编译。
+Goal: shallow-clone `14.0`, confirm it still uses `moonstone_defconfig`, and confirm the device tree contains this machine's m17 panel. Do not compile.
 
-### 计划步骤
+### Planned steps
 
-1. 克隆到 `third_party/android_kernel_xiaomi_sm6375/`，`--depth 1 --branch 14.0`。
-2. 确认 defconfig 路径是 `arch/arm64/configs/moonstone_defconfig`。
-3. 在设备树里查找 `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`。找不到就停下，不用 moonstone 的另一块面板代替。
-4. 在这棵树的 `init/Kconfig` 里核对 `CONFIG_IPC_NS` 仍依赖 `CONFIG_SYSVIPC` 或 `CONFIG_POSIX_MQUEUE`。现有片段 `kernel/config/halium-sunstone.fragment` 已经打开 `CONFIG_SYSVIPC`，可以继续用。依赖关系变了就停下。
+1. Clone to `third_party/android_kernel_xiaomi_sm6375/`, `--depth 1 --branch 14.0`.
+2. Confirm the defconfig path is `arch/arm64/configs/moonstone_defconfig`.
+3. Search the device tree for `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`. If it is not found, stop. Do not substitute another moonstone panel.
+4. In this tree's `init/Kconfig`, check that `CONFIG_IPC_NS` still depends on `CONFIG_SYSVIPC` or `CONFIG_POSIX_MQUEUE`. The existing fragment `kernel/config/halium-sunstone.fragment` already enables `CONFIG_SYSVIPC` and can keep being used. If the dependency changed, stop.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 浅克隆到 `third_party/android_kernel_xiaomi_sm6375/`，不进 git。`HEAD` 是 `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`。
+2026-11-09: shallow-cloned to `third_party/android_kernel_xiaomi_sm6375/`, not into git. `HEAD` is `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`.
 
-`arch/arm64/configs/moonstone_defconfig` 在。面板节点 `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid` 在 `arch/arm64/boot/dts/vendor/xiaomi/dsi-panel-m17-38-0c-0a-fhdp-dsc-video.dts`。`arch/arm64/boot/dts/vendor/xiaomi/Makefile` 里 `moonstone.dtb` 是基线 DTB，`sunstone-overlay.dtbo` 是第二条，对应 `dtbo_idx=1`。
+`arch/arm64/configs/moonstone_defconfig` is present. The panel node `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid` is in `arch/arm64/boot/dts/vendor/xiaomi/dsi-panel-m17-38-0c-0a-fhdp-dsc-video.dts`. In `arch/arm64/boot/dts/vendor/xiaomi/Makefile`, `moonstone.dtb` is the baseline DTB and `sunstone-overlay.dtbo` is the second entry, corresponding to `dtbo_idx=1`.
 
-`init/Kconfig` 里 `CONFIG_IPC_NS` 依赖 `SYSVIPC || POSIX_MQUEUE`，默认 y。`kernel/config/halium-sunstone.fragment` 打开了 `CONFIG_SYSVIPC`，依赖关系和 16.0 那棵树一致，片段可以继续用。
+In `init/Kconfig`, `CONFIG_IPC_NS` depends on `SYSVIPC || POSIX_MQUEUE` and defaults to y. `kernel/config/halium-sunstone.fragment` enables `CONFIG_SYSVIPC`. The dependency matches the 16.0 tree, so the fragment can keep being used.
 
-没有编译。
+Nothing was compiled.
 
-### 事件
+### Events
 
-- 浅克隆 `14.0` @ `42e99ef7`。
-- 核对 defconfig、m17 面板和 sunstone overlay 的顺序。
-- 核对 `CONFIG_IPC_NS` 的依赖，沿用现有片段。
+- Shallow-cloned `14.0` at `42e99ef7`.
+- Checked the defconfig, the m17 panel, and the order of the sunstone overlay.
+- Checked the `CONFIG_IPC_NS` dependency and kept the existing fragment.
 
-## 4. 编出 Halium 内核
+## 4. Build the Halium kernel
 
-目标：用第 3 项的树加上现有 Halium 片段，编出 `Image` 和含 m17 面板的 DTB。不刷入。
+Goal: with the tree from item 3 plus the existing Halium fragment, build an `Image` and a DTB that contains the m17 panel. Do not flash.
 
-### 计划步骤
+### Planned steps
 
-1. 工具链沿用上一篇已经编过 5.4 的一套：Ubuntu clang、`third_party/toolchain` 里的 gcc 13.3.0 nolibc、`ld.lld`。本机没有 Android 14 时代的 AOSP clang 时不另外下载一套旧 clang，编译错误停在原处。
-2. 展开 `moonstone_defconfig`，再用 `kernel/config/halium-sunstone.fragment` 合并。输出目录是 `kernel/build-14/`。
-3. 编译 `Image` 和 `dtbs`。qcacld 若再报 `-Wimplicit-enum-enum-cast`，沿用上一篇的 `KCFLAGS=-Wno-implicit-enum-enum-cast` 续编，并在笔记里写明。其他错误停下。
-4. 确认 DTB 含 `m17_38_0c_0a`，并记下 sunstone overlay 在 Makefile 里的顺序。
-5. 记录 `Image`、DTB 的大小和路径。
+1. Keep the toolchain that already built 5.4 in the previous document: Ubuntu clang, gcc 13.3.0 nolibc from `third_party/toolchain`, and `ld.lld`. If this machine does not have the AOSP clang from the Android 14 era, do not download an older clang separately. A compile error stops where it is.
+2. Expand `moonstone_defconfig`, then merge `kernel/config/halium-sunstone.fragment`. The output directory is `kernel/build-14/`.
+3. Build `Image` and `dtbs`. If qcacld reports `-Wimplicit-enum-enum-cast` again, resume with the previous document's `KCFLAGS=-Wno-implicit-enum-enum-cast` and say so in the notes. Any other error stops.
+4. Confirm the DTB contains `m17_38_0c_0a`, and record the sunstone overlay's order in the Makefile.
+5. Record the size and path of `Image` and the DTB.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 编完，没有刷入。输出在 `kernel/build-14/`，不进 git，也没有覆盖 `kernel/build/` 里上一篇的 16.0 产物。
+2026-11-09: the build finished and nothing was flashed. Output is in `kernel/build-14/`, not in git, and it did not overwrite the 16.0 products in `kernel/build/` from the previous document.
 
-源码差异和配置差异分开记，内核树继续留在 gitignore 里。配置是 `kernel/config/halium-sunstone.fragment`。源码相对 `crdroidandroid/android_kernel_xiaomi_sm6375` 的 `14.0`、提交 `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`，补丁在 `kernel/patches/`。浅克隆之后、展开 defconfig 之前，在内核目录执行 `git apply`，路径按克隆位置换成仓库里的 `kernel/patches/*.patch`。`git apply` 能直接吃这些文件。
+Source differences and config differences are recorded separately. The kernel tree stays in gitignore. The config is `kernel/config/halium-sunstone.fragment`. The source is relative to `crdroidandroid/android_kernel_xiaomi_sm6375` branch `14.0`, commit `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`. Patches are in `kernel/patches/`. After the shallow clone, and before expanding the defconfig, run `git apply` in the kernel directory. Replace the paths with this repository's `kernel/patches/*.patch` according to where the tree was cloned. `git apply` accepts these files directly.
 
-工具链是 Ubuntu clang 21.1.8、`third_party/toolchain` 的 gcc 13.3.0 nolibc、`ld.lld`。`moonstone_defconfig` 里 `CONFIG_SYSVIPC`、`CONFIG_PID_NS`、`CONFIG_USER_NS`、`CONFIG_VT`、`CONFIG_DEVTMPFS`、`CONFIG_FHANDLE` 原本是关闭的，合并 `kernel/config/halium-sunstone.fragment` 之后这几项和 `CONFIG_IPC_NS`、`CONFIG_VT_CONSOLE`、`CONFIG_DEVTMPFS_MOUNT` 都是 y。第一次在仓库根目录跑 `merge_config.sh` 时，它在错误的目录里找 `alldefconfig`；改到内核树里重跑后写进了 `.config`。
+The toolchain is Ubuntu clang 21.1.8, gcc 13.3.0 nolibc from `third_party/toolchain`, and `ld.lld`. In `moonstone_defconfig`, `CONFIG_SYSVIPC`, `CONFIG_PID_NS`, `CONFIG_USER_NS`, `CONFIG_VT`, `CONFIG_DEVTMPFS`, and `CONFIG_FHANDLE` were originally off. After merging `kernel/config/halium-sunstone.fragment`, those plus `CONFIG_IPC_NS`, `CONFIG_VT_CONSOLE`, and `CONFIG_DEVTMPFS_MOUNT` are all y. The first time `merge_config.sh` was run from the repository root, it looked for `alldefconfig` in the wrong directory. After it was rerun inside the kernel tree, the result was written into `.config`.
 
-clang 21 在 16.0 那棵树上会把 qcacld 的枚举转换当成错误。这次从一开始就加了 `KCFLAGS=-Wno-implicit-enum-enum-cast`。链接只有栈帧大小警告，以及 `embms_tm_multicast_recv`、`ope_soc_info` 两个 static `EXPORT_SYMBOL` 警告。`Image` 生成。
+clang 21 treats an enum conversion in qcacld as an error on the 16.0 tree. This build added `KCFLAGS=-Wno-implicit-enum-enum-cast` from the start. The link had only stack-frame-size warnings, plus two static `EXPORT_SYMBOL` warnings for `embms_tm_multicast_recv` and `ope_soc_info`. `Image` was produced.
 
-产物：
+Products:
 
-- `kernel/build-14/arch/arm64/boot/Image`，47860224 字节，SHA256 `49df6f26aa062243737a1b593618135823f302af3b4392000eedc29c89e12cb2`
-- `moonstone.dtb`，441131 字节，含 `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`。模型是 `Blair QRD NOPMI`，`qcom,msm-id` 为 `<0x1fb 0x10000 0x242 0x10000>`，`qcom,board-id` 为 `<0x1000b 0x00>`
-- `sunstone-overlay.dtbo`，461 字节，是 Makefile 里的第二条
+- `kernel/build-14/arch/arm64/boot/Image`, 47860224 bytes, SHA256 `49df6f26aa062243737a1b593618135823f302af3b4392000eedc29c89e12cb2`
+- `moonstone.dtb`, 441131 bytes, containing `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`. The model is `Blair QRD NOPMI`, `qcom,msm-id` is `<0x1fb 0x10000 0x242 0x10000>`, and `qcom,board-id` is `<0x1000b 0x00>`
+- `sunstone-overlay.dtbo`, 461 bytes, the second entry in the Makefile
 
-### 事件
+### Events
 
-- 合并 Halium 片段。第一次 `merge_config.sh` 不在内核目录，失败后在内核树里重跑。
-- 带上 qcacld 那条警告抑制后编完 `Image` 和 DTB。
-- 确认新 DTB 含 m17 面板。没有刷入。
+- Merged the Halium fragment. The first `merge_config.sh` was not in the kernel directory. After it failed, it was rerun inside the kernel tree.
+- Built `Image` and the DTB with the qcacld warning suppression.
+- Confirmed the new DTB contains the m17 panel. Nothing was flashed.
 
-## 5. 从 Android 14 包抽出启动分区并打出未刷入的镜像
+## 5. Extract the boot partitions from the Android 14 package and build images that are not flashed
 
-目标：boot 和 vendor_boot 使用这份 Android 14 包里的 ramdisk 和 cmdline，内核和 DTB 换成第 4 项的产物。DTBO 用包里的那一份。不执行 fastboot。
+Goal: boot and vendor_boot use the ramdisk and command line from this Android 14 package. The kernel and DTB are replaced with the products from item 4. DTBO uses the one from the package. Do not run fastboot.
 
-### 计划步骤
+### Planned steps
 
-1. 只读拆开 zip 里的 `payload.bin`，抽出 `boot`、`vendor_boot`、`dtbo`、`vbmeta` 到 `out/halium14/stock/`。
-2. 核对魔数和 header version。对照 vendor cmdline、DTB 是否仍选中 m17 面板，以及 `dtbo` 的条目顺序是否仍把 sunstone 放在索引 1。
-3. 用 AOSP `mkbootimg.py` 打新的 header v3 镜像到 `out/halium14/`。boot 复用包里的 ramdisk。vendor_boot 复用包里的 vendor ramdisk 和 vendor cmdline，DTB 换成新编的。页大小 4096。地址沿用包内镜像：kernel `0x8000`，ramdisk `0x01000000`，tags `0x100`，dtb `0x01f00000`。包内地址不同时以包内为准，并写进笔记。
-4. 解包新镜像，核对魔数、版本和大小（boot 小于 128 MiB，vendor_boot 小于 96 MiB）。
-5. 计算 SHA256。不写分区。
+1. Unpack `payload.bin` from the zip, read-only, and extract `boot`, `vendor_boot`, `dtbo`, and `vbmeta` to `out/halium14/stock/`.
+2. Check magic and header version. Check whether the vendor command line and DTB still select the m17 panel, and whether the `dtbo` entry order still puts sunstone at index 1.
+3. Use AOSP `mkbootimg.py` to build a new header v3 image into `out/halium14/`. boot reuses the package ramdisk. vendor_boot reuses the package vendor ramdisk and vendor command line, and replaces the DTB with the newly built one. Page size 4096. Addresses follow the in-package image: kernel `0x8000`, ramdisk `0x01000000`, tags `0x100`, dtb `0x01f00000`. If the in-package addresses differ, the in-package ones win, and that is written into the notes.
+4. Unpack the new images and check magic, version, and size (boot under 128 MiB, vendor_boot under 96 MiB).
+5. Compute SHA256. Do not write partitions.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 从 `payload.bin` 抽出 `boot`、`vendor_boot`、`dtbo`、`vbmeta` 到 `out/halium14/stock/`。`payload.bin` 解完就删了。没有刷入。
+2026-11-09: extracted `boot`, `vendor_boot`, `dtbo`, and `vbmeta` from `payload.bin` to `out/halium14/stock/`. `payload.bin` was deleted after it was unpacked. Nothing was flashed.
 
-包内 boot 是 header v3，OS 14.0.0，补丁级别 2024-12，cmdline 为空。内核 44558848 字节，ramdisk 17159058 字节。vendor_boot 页大小 4096，kernel `0x8000`，ramdisk `0x01000000`，tags `0x100`，dtb `0x01f00000`。vendor cmdline 是：
+The in-package boot is header v3, OS 14.0.0, patch level 2024-12, empty command line. The kernel is 44558848 bytes, the ramdisk 17159058 bytes. vendor_boot page size is 4096, kernel `0x8000`, ramdisk `0x01000000`, tags `0x100`, dtb `0x01f00000`. The vendor command line is:
 
 `androidboot.hardware=qcom androidboot.memcg=1 androidboot.usbcontroller=4e00000.dwc3 cgroup.memory=nokmem,nosocket loop.max_part=7 msm_rtb.filter=0x237 service_locator.enable=1 swiotlb=0 pcie_ports=compat iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 androidboot.init_fatal_reboot_target=recovery`
 
-vendor_boot 里的 DTB 是三段拼在一起的，分别是 Blair、Blairp、Holi 的 SoC DTB，板级 id 都是 0。面板不在这三段里。`dtbo.img` 有 28 个条目，启动器用 `msm-id` 和 `board-id` 选择，不是固定的索引 1。索引 1 是 Blairp ATP。和这台机器新 DTB 相同的条目是 03：`Blair QRD NOPMI`，`board-id <0x1000b 0x00>`，`msm-id <0x1fb 0x10000 0x242 0x10000>`。所以 vendor_boot 保留包里的 DTB、vendor ramdisk 和 cmdline，`dtbo`、`vbmeta` 也用包里的。新 `boot.img` 只换内核，ramdisk 与包内逐字节相同。
+The DTB inside vendor_boot is three pieces concatenated: the SoC DTBs for Blair, Blairp, and Holi. All three board ids are 0. The panel is not in those three pieces. `dtbo.img` has 28 entries. The bootloader selects by `msm-id` and `board-id`, not by a fixed index 1. Index 1 is Blairp ATP. The entry that matches this machine's new DTB is 03: `Blair QRD NOPMI`, `board-id <0x1000b 0x00>`, `msm-id <0x1fb 0x10000 0x242 0x10000>`. So vendor_boot keeps the DTB, vendor ramdisk, and command line from the package, and `dtbo` and `vbmeta` also use the ones from the package. The new `boot.img` replaces only the kernel. Its ramdisk is byte-for-byte the same as the one in the package.
 
-新镜像：
+New images:
 
-- `out/halium14/boot.img`，65028096 字节，小于 128 MiB。header v3，OS 14.0.0 / 2024-12，内核 47860224 字节。SHA256 `cbade73955c22ad1a2c0eef1ae98a9621d93aebf9260d8a06cd26a25cb3ae565`
-- `out/halium14/vendor_boot.img`，1687552 字节，小于 96 MiB。DTB 和 vendor ramdisk 与包内逐字节相同。SHA256 `e60da5a06edebee4e6f3ba9cc35826537e8ea11c9cf1e74ad1ef835ea338650f`
-- 包内 `dtbo.img` SHA256 `dd48023792fe91dbc1feded3f52bd97be0bf733dd733d4accbbed23c689ae6d4`
-- 包内 `vbmeta.img` SHA256 `3b0ac2e7d8d82b586ab86390f893a41212a2ac963eebd6901b4010bcbdd18f2c`
+- `out/halium14/boot.img`, 65028096 bytes, under 128 MiB. Header v3, OS 14.0.0 / 2024-12, kernel 47860224 bytes. SHA256 `cbade73955c22ad1a2c0eef1ae98a9621d93aebf9260d8a06cd26a25cb3ae565`
+- `out/halium14/vendor_boot.img`, 1687552 bytes, under 96 MiB. DTB and vendor ramdisk are byte-for-byte the same as in the package. SHA256 `e60da5a06edebee4e6f3ba9cc35826537e8ea11c9cf1e74ad1ef835ea338650f`
+- In-package `dtbo.img` SHA256 `dd48023792fe91dbc1feded3f52bd97be0bf733dd733d4accbbed23c689ae6d4`
+- In-package `vbmeta.img` SHA256 `3b0ac2e7d8d82b586ab86390f893a41212a2ac963eebd6901b4010bcbdd18f2c`
 
-payload 里还有 `odm`、`product`、`system`、`system_ext`、`vendor`、`vbmeta_system`。没有单独的 `super`，也没有 userdata。
+The payload also has `odm`, `product`, `system`, `system_ext`, `vendor`, and `vbmeta_system`. There is no separate `super`, and no userdata.
 
-### 事件
+### Events
 
-- 抽出 boot、vendor_boot、dtbo、vbmeta。
-- 拆开 vendor DTB 和 28 条 dtbo，确认 sunstone 不是索引 1，板级匹配的是条目 03。
-- 新 boot 只替换内核。vendor_boot 保留包内设备树。没有执行 fastboot。
+- Extracted boot, vendor_boot, dtbo, and vbmeta.
+- Unpacked the vendor DTB and the 28 dtbo entries. Confirmed sunstone is not index 1. The board-id match is entry 03.
+- The new boot replaces only the kernel. vendor_boot keeps the device tree from the package. fastboot was not run.
 
-## 6. 人工测试：刷入 Android 14，再换 Halium 启动镜像
+## 6. Manual test: flash Android 14, then switch to the Halium boot image
 
-目标：先让这台 sunstone 跑上与 Halium 14 同代的 vendor，再换第 5 项的启动镜像。执行前停下，等人工把手机送进刷写模式并确认可以替换 `super`。
+Goal: first get this sunstone running a vendor of the same generation as Halium 14, then switch to the boot image from item 5. Stop before executing, and wait until a person puts the phone into flash mode and confirms that `super` may be replaced.
 
-### 计划步骤
+### Planned steps
 
-1. 把第 2 项看到的系统镜像和根文件系统布局补成具体刷写命令，写进实现笔记。命令只写不执行。
-2. 向用户说明：这一步会替换 `super`，工作区不能把 crDroid 16 装回去；userdata 上现在的 Droidian 根文件系统也会在安装 Ubuntu Touch 时被换掉。用户已确认 userdata 没有要保留的个人文件。
-3. 等用户把手机送进 fastboot 或 recovery，并明确说可以刷。
-4. 刷完后由用户看屏幕。没有进入系统、停在 logo 或 fastboot 时，先读日志，不连续重刷。
+1. Turn the system-image and root-filesystem layout seen in item 2 into concrete flash commands, and write them into the implementation notes. Write the commands. Do not run them.
+2. Tell the user: this step replaces `super`. The workspace cannot put crDroid 16 back. The Droidian root filesystem currently on userdata will also be replaced when Ubuntu Touch is installed. The user has confirmed userdata has no personal files to keep.
+3. Wait until the user puts the phone into fastboot or recovery and explicitly says it may be flashed.
+4. After the flash, the user looks at the screen. If it does not enter the system, sticks on the logo, or stops in fastboot, read logs first. Do not reflash in a loop.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 停在这里。下面的命令没有执行。
+2026-11-09: stopped here. The commands below were not executed.
 
-这一步会替换 `super` 里的 crDroid 16。工作区没有 12.9 的完整安装包，`backups/2026-11-09-crdroid-12.9/` 只能写回启动分区。payload 不含 userdata，现在 userdata 上的 Droidian 根文件系统先留着。Ubuntu Touch 根文件系统等这次启动有结果后再装。
+This step replaces crDroid 16 inside `super`. The workspace has no complete 12.9 install package. `backups/2026-11-09-crdroid-12.9/` can only write boot partitions back. The payload does not contain userdata. The Droidian root filesystem currently on userdata stays for now. The Ubuntu Touch root filesystem is installed after this boot has a result.
 
-用户把手机送进 fastboot 并明确说可以刷之后，再做：
+Do the following only after the user puts the phone into fastboot and explicitly says it may be flashed:
 
-1. 把 payload 里还没抽出的 `odm`、`product`、`system`、`system_ext`、`vendor`、`vbmeta_system` 解到 `out/halium14/stock/`。
-2. 进入 fastbootd，槽位保持 `_b`。
-3. 把那五个逻辑分区和 `vbmeta_system` 按包内镜像写入当前槽。
-4. `dtbo_b`、`vbmeta_b` 用包内镜像。`boot_b` 用 `out/halium14/boot.img`。`vendor_boot_b` 用 `out/halium14/vendor_boot.img`。
-5. 重启。由用户看屏幕。没有进系统、停在 logo 或回到 fastboot 时，先读日志，不连续重刷。
+1. Unpack `odm`, `product`, `system`, `system_ext`, `vendor`, and `vbmeta_system`, which are still in the payload and have not been extracted, into `out/halium14/stock/`.
+2. Enter fastbootd. Keep the slot at `_b`.
+3. Write those five logical partitions and `vbmeta_system` to the current slot from the in-package images.
+4. `dtbo_b` and `vbmeta_b` use the in-package images. `boot_b` uses `out/halium14/boot.img`. `vendor_boot_b` uses `out/halium14/vendor_boot.img`.
+5. Reboot. The user looks at the screen. If it does not enter the system, sticks on the logo, or returns to fastboot, read logs first. Do not reflash in a loop.
 
-### 事件
+### Events
 
-- 写出刷写顺序。没有把手机送进 fastboot，没有写分区。
-- 用户进入 bootloader fastboot 后，先执行了 `fastboot reboot fastboot`。手机没有进入 fastbootd，而是启动了现在的 Droidian。当前 `boot_b` 是 Droidian 镜像，ramdisk 里没有 `fastbootd`。包内 Android 14 boot ramdisk 是 gzip，含 `system/bin/fastbootd`。分区都没有写。下一步改为先在 bootloader 写入 boot、vendor_boot、dtbo、vbmeta，再进 fastbootd 写逻辑分区。
-- 2026-11-09 按这个顺序写了 `boot_b`（`out/halium14/boot.img`）、`vendor_boot_b`、`dtbo_b`、`vbmeta_b`，槽位保持 `_b`。再次 `fastboot reboot fastboot` 进入了 fastbootd。`fastboot getvar unlocked` 是 no，调整 `odm_b` 被拒绝。bootloader 里 `unlocked: yes`，`Device unlocked: true`。fastbootd 用 `ro.boot.verifiedbootstate` 是否等于 `green` 判断锁定。往 vendor cmdline 加上 `androidboot.verifiedbootstate=orange` 之后仍然是 no。把 ramdisk 里 `system/bin/fastbootd` 的比较字符串 `green` 改成 `xxxxx` 后，fastbootd 报 unlocked: yes。
-- 逻辑分区：`system_b`、`system_ext_b`、`product_b`、`vendor_b` 写入成功。`odm_b` 第一次失败，super 里还占着上一套 virtual A/B 的 `*-cow`。删掉 `system_b-cow`、`system_ext_b-cow`、`product_b-cow`、`vendor_b-cow`、`odm_b-cow` 后 `odm_b` 和 `vbmeta_system_b` 写入成功。没有动 userdata。然后 `fastboot reboot`。
-- 重启后进了 Android recovery：Can't load Android system. Your data may be corrupt。电脑上 adb 能看到设备但是 unauthorized，发不了清除命令。userdata 仍是上一套 Android 16 的加密文件系统，Android 14 挂不上。用户确认数据不重要，在这个界面做了 Factory reset。
-- 清除后系统能启动。开机动画正常，进到锁屏后屏幕全黑，锁屏音和充电提示音都有，触摸也有效。分区刷写是成功的，黑屏发生在开机动画把显示交给锁屏之后。
-- 对照包内 `boot.img` 的 `IKCONFIG` 和 `kernel/build-14/.config` 后，先把包内原版 `boot.img` 写回 `boot_b`。这次界面正常，确认黑屏来自我们编的内核，不是系统分区。这台机器的指纹在电源键上，不是屏下指纹，之前把 `FINGERPRINT_GOODIX_FOD` 当成黑屏原因是错的。
-- 正在运行的原版内核是 `5.4.259-qgki-g3ad529ef5970`，2024-08-09 由小米 pangu 用 clang 11 编的。`ro.crdroid.build.version` 是 `crDroidAndroid-14.0-20241212-stone-v10.11`。我们的 `Image` 是 `5.4.283~positron/42e99ef7`，clang 21。提交 `3ad529ef5970` 不在 `crdroidandroid/android_kernel_xiaomi_sm6375` 的 `14.0` 上。cmdline 里 `androidboot.dtbo_idx=3`，面板是 `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`。用户已开 root adb。
-- 第一次黑屏的内核日志在开机动画结束后报 `esd check failed report PANEL_DEAD`。来源是 `sde_encoder_kickoff()` 里 crDroid 补丁故意在第一帧调用 `_sde_connector_report_panel_dead()`。去掉这段之后重编（`#2`，SHA256 `0177473a38c6f201c5857239f27cccba234289d10e191a9ea69de547212ee87e`）并写回 `boot_b`。截图能看到锁屏，`PANEL_DEAD` 不再出现。
-- 之后屏幕亮一下又黑，是电源管理在开关屏，不是合成失败。`blank:3` 是刷新率 120/60 切换。真正灭屏是 `blank:1`。logcat 里 `Going to sleep due to power_button` 后马上 `WAKE_REASON_POWER_BUTTON`，内核对应 `PMIC input: KPDPWR`。另有 30 秒超时进 Doze，以及抬起唤醒。已执行 `svc power stayon true`，避免超时再把屏关掉。
-- 用户补充：不触摸时屏幕能保持亮，一有触摸就在一两秒内闪烁然后黑。当前 `#3` 内核同样。日志里手指按下后 15 毫秒执行 `dsi_display_set_mode fps=120`，之前停在 60。软件注入的点击也会切刷新率，但面板还能画出界面。把 `settings system peak_refresh_rate` 和 `min_refresh_rate` 都写成 `60.0` 之后，显示模式停在 60Hz，不再来回切。
-- `#3` 内核（SHA256 `35f5278fb781709296dee99187bc885b04b4af56d600bc38bc14428e5daa3b49`）去掉了 `sde_encoder_kickoff()` 里的 `dsi_set_backlight_control()`。锁 60Hz 之后用户仍然一触摸就闪、然后黑。刷新率切换和这条命令都不是原因。
-- 15:36 到 15:51 之间 Android 没有任何灭屏、Doze 或电源事件，`mState=ON`，用户却看到触摸后黑屏。所以黑屏发生在面板，不在 Android 电源管理。内核在触摸前后只有触摸上报，没有 `PANEL_DEAD`、`blank`、modeset。tracefs 里 `sde_encoder_underrun` 也没有触发。另外 15:52:02 的一次灭屏是 `Going to sleep due to application (uid 10418)`，是桌面 Launcher3 的双击锁屏，属于正常行为，不要和这个故障混在一起。
-- 时间对上的是亮度：15:45:32.123 `DisplayPowerController` 从变暗的 0.05 升回 0.26，34 毫秒后才是那次触摸手势。触摸只是把屏幕从变暗状态唤回，随后一两秒的亮度渐变才是闪烁。
-- 根因在设备树。crDroid 16 的 `vendor_boot` dtb 里，这块面板有 `qcom,mdss-dsi-bl-inverted-dbv`。Android 14 原厂 `dtbo` 第 3 项没有这个属性，只有小米自己的 `qcom,mdss-dsi-bl-dcs-type-ss-ea`。crDroid 内核（`sm6375` 和 `stone` 两棵树）只认前者。少了它，`mipi_dsi_dcs_set_display_brightness()` 先发低字节，面板按高字节在前解读。544（0x0220）到面板成了 0x2002，按 11 位就是 2，近乎全黑。变暗时的 111（0x006F）成了 0x6F00，反而是亮的。这就是不碰时亮、一碰就闪然后黑。
-- 不重编先做了验证：往 `/sys/class/backlight/panel0-backlight/brightness` 写 514（0x0202，两个字节相同，换不换序都一样）。用户确认屏幕正常、稳定、亮度适中。
-- crDroid 16 dtb 里，正好是两块带 `ss-ea` 的 m17 面板加了 `inverted-dbv`，其它面板早就有。所以在 `dsi_panel_parse_bl_config()` 里把 `qcom,mdss-dsi-bl-dcs-type-ss-ea` 也当作 `bl_inverted_dbv`。同时把 `dsi_set_backlight_control()` 放回 `sde_encoder_kickoff()`，原版内核和 crDroid 16 内核都会按刷新率发 bc 命令。第一帧 `PANEL_DEAD` 那段仍然去掉。
-- `#4` 内核 SHA256 `7fcc1d7a0e5661972ff5c702fb79c69d271b2b7bc5fe995c4e1a620a34820bfe`，写入 `boot_b`。删掉了 `peak_refresh_rate` 和 `min_refresh_rate`，`screen_off_timeout` 恢复 30000。用户解锁、滑动、开应用、拖亮度条、电源键开关屏，屏幕都稳定，亮度条平滑。显示问题解决。
-- 回头清理之前的尝试。`#2` 去掉第一帧 `PANEL_DEAD` 是误判：开机动画后黑屏同样是亮度字节序，Android 正是在那时写入 544。crDroid 16 内核保留这段，所以 `sde_encoder.c` 用 `git checkout` 恢复成上游原样。内核树相对 `42e99ef7` 只剩 `dsi_panel.c` 的 `ss-ea` 修正。手机上执行 `svc power stayon false`（`stay_on_while_plugged_in` 回到 0），`screen_off_timeout` 回到 30000。`peak_refresh_rate` 是 crDroid 默认的 `Infinity`。
-- `#5` 内核 SHA256 `756be6253b146699794ef892762426107b502aca570c5003611e7c66c8c6fb98`，写入 `boot_b`。开机 11.9 秒报一次 `PANEL_DEAD`，是那段补丁的预期行为，随后 `mState=ON`。用户确认显示和 `#4` 一样稳定。
-- 亮度字节序的修改不进被忽略的内核树。导出为 `kernel/patches/0001-dsi-treat-xiaomi-ss-ea-as-inverted-dbv.patch`，基线就是上面的 `42e99ef7`。在干净树上 `git apply` 复核过，打完和现在 `third_party/android_kernel_xiaomi_sm6375/` 里的 `dsi_panel.c` 一致。
+- Wrote the flash order. The phone was not put into fastboot, and no partitions were written.
+- After the user entered bootloader fastboot, `fastboot reboot fastboot` was run first. The phone did not enter fastbootd. It booted the current Droidian. The current `boot_b` is the Droidian image, and its ramdisk has no `fastbootd`. The in-package Android 14 boot ramdisk is gzip and contains `system/bin/fastbootd`. No partitions were written. The next step was changed: from the bootloader, write boot, vendor_boot, dtbo, and vbmeta first, then enter fastbootd and write the logical partitions.
+- 2026-11-09: in that order, wrote `boot_b` (`out/halium14/boot.img`), `vendor_boot_b`, `dtbo_b`, and `vbmeta_b`. The slot stayed `_b`. `fastboot reboot fastboot` then entered fastbootd. `fastboot getvar unlocked` was no, and resizing `odm_b` was rejected. In the bootloader, `unlocked: yes` and `Device unlocked: true`. fastbootd decides locked by whether `ro.boot.verifiedbootstate` equals `green`. Adding `androidboot.verifiedbootstate=orange` to the vendor command line still left it at no. After the comparison string `green` inside the ramdisk's `system/bin/fastbootd` was changed to `xxxxx`, fastbootd reported unlocked: yes.
+- Logical partitions: `system_b`, `system_ext_b`, `product_b`, and `vendor_b` were written successfully. `odm_b` failed the first time. `super` still held the previous virtual A/B `*-cow` set. After deleting `system_b-cow`, `system_ext_b-cow`, `product_b-cow`, `vendor_b-cow`, and `odm_b-cow`, `odm_b` and `vbmeta_system_b` were written successfully. userdata was not touched. Then `fastboot reboot`.
+- After the reboot it entered Android recovery: Can't load Android system. Your data may be corrupt. On the computer, adb could see the device but it was unauthorized, so a wipe command could not be sent. userdata was still the previous Android 16 encrypted filesystem, which Android 14 cannot mount. The user confirmed the data did not matter and did a Factory reset on that screen.
+- After the wipe, the system could boot. The boot animation was normal. After the lock screen, the screen went fully black. The lock-screen sound and the charging chime were both present, and touch worked. The partition flash succeeded. The black screen happened after the boot animation handed the display to the lock screen.
+- After comparing `IKCONFIG` from the in-package `boot.img` with `kernel/build-14/.config`, the original in-package `boot.img` was written back to `boot_b` first. The UI was normal this time, which confirmed the black screen came from the kernel we built, not from the system partitions. This machine's fingerprint reader is on the power key, not under the display. Treating `FINGERPRINT_GOODIX_FOD` as the cause of the black screen was wrong.
+- The running stock kernel is `5.4.259-qgki-g3ad529ef5970`, built 2024-08-09 by Xiaomi pangu with clang 11. `ro.crdroid.build.version` is `crDroidAndroid-14.0-20241212-stone-v10.11`. Our `Image` is `5.4.283~positron/42e99ef7`, clang 21. Commit `3ad529ef5970` is not on `14.0` of `crdroidandroid/android_kernel_xiaomi_sm6375`. The command line has `androidboot.dtbo_idx=3`. The panel is `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`. The user has enabled root adb.
+- The kernel log of the first black screen reported `esd check failed report PANEL_DEAD` after the boot animation ended. The source is a crDroid patch inside `sde_encoder_kickoff()` that deliberately calls `_sde_connector_report_panel_dead()` on the first frame. After that stretch was removed and the kernel rebuilt (`#2`, SHA256 `0177473a38c6f201c5857239f27cccba234289d10e191a9ea69de547212ee87e`) and written back to `boot_b`, a screenshot could see the lock screen, and `PANEL_DEAD` no longer appeared.
+- The screen then lit and went black again. That was power management turning the panel on and off, not a composition failure. `blank:3` is the 120/60 refresh-rate switch. The real panel-off is `blank:1`. In logcat, `Going to sleep due to power_button` was immediately followed by `WAKE_REASON_POWER_BUTTON`, and the kernel side was `PMIC input: KPDPWR`. There was also a 30-second timeout into Doze, and lift-to-wake. `svc power stayon true` was run so the timeout would not turn the screen off again.
+- The user added: when nothing is touched, the screen stays lit. As soon as it is touched, it flickers within a second or two and then goes black. The current `#3` kernel does the same. In the log, 15 milliseconds after a finger press, `dsi_display_set_mode fps=120` runs. Before that it was sitting at 60. A software-injected tap also switches the refresh rate, but the panel can still draw the UI. After both `settings system peak_refresh_rate` and `min_refresh_rate` were written as `60.0`, the display mode stayed at 60Hz and stopped switching back and forth.
+- Kernel `#3` (SHA256 `35f5278fb781709296dee99187bc885b04b4af56d600bc38bc14428e5daa3b49`) removed `dsi_set_backlight_control()` from `sde_encoder_kickoff()`. After locking 60Hz, the user still saw flicker and then black as soon as they touched. Neither the refresh-rate switch nor this command is the cause.
+- Between 15:36 and 15:51 Android had no screen-off, Doze, or power event. `mState=ON`, and the user still saw a black screen after touch. So the black screen happens on the panel, not in Android power management. Around the touch the kernel has only the touch report. There is no `PANEL_DEAD`, `blank`, or modeset. `sde_encoder_underrun` in tracefs did not fire either. Separately, one screen-off at 15:52:02 was `Going to sleep due to application (uid 10418)`, the Launcher3 double-tap to lock the screen. That is normal behavior. Do not mix it with this fault.
+- What lines up in time is brightness: at 15:45:32.123 `DisplayPowerController` rose from a dimmed 0.05 back to 0.26, and the touch gesture was 34 milliseconds later. Touch only brought the screen back from the dimmed state. The brightness ramp over the next second or two is the flicker.
+- The root cause is in the device tree. In crDroid 16's `vendor_boot` dtb, this panel has `qcom,mdss-dsi-bl-inverted-dbv`. Entry 3 of the stock Android 14 `dtbo` does not have that property. It only has Xiaomi's own `qcom,mdss-dsi-bl-dcs-type-ss-ea`. The crDroid kernel (both the `sm6375` and `stone` trees) recognizes only the former. Without it, `mipi_dsi_dcs_set_display_brightness()` sends the low byte first, and the panel reads it as high byte first. 544 (0x0220) arrives at the panel as 0x2002, which as 11 bits is 2, nearly full black. The dimmed 111 (0x006F) becomes 0x6F00, which is bright instead. That is why it is bright when untouched, and flickers then goes black as soon as it is touched.
+- Verified without a rebuild: wrote 514 (0x0202, both bytes the same, so byte order does not matter) to `/sys/class/backlight/panel0-backlight/brightness`. The user confirmed the screen was normal, stable, and at a moderate brightness.
+- In the crDroid 16 dtb, exactly the two m17 panels that carry `ss-ea` also have `inverted-dbv`. The other panels already had it. So in `dsi_panel_parse_bl_config()`, `qcom,mdss-dsi-bl-dcs-type-ss-ea` is also treated as `bl_inverted_dbv`. At the same time `dsi_set_backlight_control()` was put back into `sde_encoder_kickoff()`. Both the stock kernel and the crDroid 16 kernel send the bc command according to the refresh rate. The first-frame `PANEL_DEAD` stretch stayed removed.
+- Kernel `#4`, SHA256 `7fcc1d7a0e5661972ff5c702fb79c69d271b2b7bc5fe995c4e1a620a34820bfe`, was written to `boot_b`. `peak_refresh_rate` and `min_refresh_rate` were deleted, and `screen_off_timeout` was restored to 30000. The user unlocked, swiped, opened apps, dragged the brightness slider, and turned the screen on and off with the power key. The screen stayed stable, and the brightness slider was smooth. The display problem is solved.
+- Then the earlier attempts were cleaned up. Removing the first-frame `PANEL_DEAD` in `#2` was a misdiagnosis: the black screen after the boot animation was the same brightness byte order. Android writes 544 at exactly that moment. The crDroid 16 kernel keeps that stretch, so `sde_encoder.c` was restored to upstream with `git checkout`. Relative to `42e99ef7`, the kernel tree has only the `ss-ea` fix in `dsi_panel.c` left. On the phone, `svc power stayon false` was run (`stay_on_while_plugged_in` back to 0), and `screen_off_timeout` went back to 30000. `peak_refresh_rate` is crDroid's default `Infinity`.
+- Kernel `#5`, SHA256 `756be6253b146699794ef892762426107b502aca570c5003611e7c66c8c6fb98`, was written to `boot_b`. At 11.9 seconds of boot it reported `PANEL_DEAD` once, which is the expected behavior of that patch, and then `mState=ON`. The user confirmed the display is as stable as `#4`.
+- The brightness byte-order change does not stay only inside the ignored kernel tree. It was exported as `kernel/patches/0001-dsi-treat-xiaomi-ss-ea-as-inverted-dbv.patch`. The baseline is the `42e99ef7` above. `git apply` was checked on a clean tree. After it applies, it matches `dsi_panel.c` in the current `third_party/android_kernel_xiaomi_sm6375/`.
 
-## 7. 准备 Ubuntu Touch 的 userdata 和启动镜像
+## 7. Prepare Ubuntu Touch userdata and the boot image
 
-目标：第 6 项的 Android 14 已经在这台 sunstone 上跑起来，显示可用。这一项在主机上做好 Ubuntu Touch 24.04 的 ext4 和配套 boot。不写分区，不重启。写入手机和看屏幕是下一次人工测试。
+Goal: the Android 14 from item 6 is already running on this sunstone, and the display works. This item prepares an Ubuntu Touch 24.04 ext4 and a matching boot on the host. Do not write partitions and do not reboot. Writing to the phone and looking at the screen are the next manual test.
 
-### 计划步骤
+### Planned steps
 
-1. 按根文件系统里的挂载脚本核对 `android-rootfs.img` 的路径。和第 2 项从压缩包路径看出的位置不一致时，以脚本为准。
-2. 把 Ubuntu 根文件系统展开成一份 ext4。镜像容量小于 userdata，只覆盖分区开头。Halium 的 `android-rootfs.img` 放进脚本要找的位置。
-3. 用现有的 aarch64 静态 busybox 做 initramfs。按 `PARTNAME=userdata` 找到分区，以 ext4 挂上，`switch_root` 进 `/sbin/init`。
-4. 用已经含亮度补丁的 `#5` 内核打 header v3 的 boot。不重打 `vendor_boot`，DTB 继续用槽位里现有的那份。
-5. 核对镜像内容。不执行 fastboot。
+1. Check the path of `android-rootfs.img` against the mount scripts in the root filesystem. If it disagrees with the location item 2 read from the archive path, the script wins.
+2. Unpack the Ubuntu root filesystem into an ext4. The image is smaller than userdata and covers only the start of the partition. Put Halium's `android-rootfs.img` where the script looks for it.
+3. Build an initramfs with the existing aarch64 static busybox. Find the partition by `PARTNAME=userdata`, mount it as ext4, and `switch_root` into `/sbin/init`.
+4. Pack a header v3 boot with the `#5` kernel that already contains the brightness patch. Do not rebuild `vendor_boot`. The DTB stays the one already in the slot.
+5. Check the image contents. Do not run fastboot.
 
-### 实现笔记
+### Implementation notes
 
-2026-11-09 两个镜像都在 `out/halium14/`，不进 git。没有刷入。
+2026-11-09: both images are in `out/halium14/`, not in git. Nothing was flashed.
 
-第 2 项写的 `/system/var/lib/lxc/android/android-rootfs.img` 是 Halium 包里的路径。Ubuntu 根文件系统里 `/system` 是指向 `/android/system` 的符号链接。`usr/libexec/lxc-android-config/mount-android-system` 实际依次找 `/var/lib/lxc/android/android-rootfs.img`、`system.img`，以及 `/userdata/` 下的同名文件。找到 `android-rootfs.img` 就把它 loop 挂到 `/android`，这个镜像内部自带 `/system` 目录。所以镜像里放的是 `/var/lib/lxc/android/android-rootfs.img`，453488640 字节。
+The path `/system/var/lib/lxc/android/android-rootfs.img` written in item 2 is the path inside the Halium package. In the Ubuntu root filesystem, `/system` is a symlink to `/android/system`. `usr/libexec/lxc-android-config/mount-android-system` actually looks, in order, at `/var/lib/lxc/android/android-rootfs.img`, `system.img`, and the same names under `/userdata/`. When it finds `android-rootfs.img` it loop-mounts it at `/android`. That image has its own `/system` directory inside. So what goes in the image is `/var/lib/lxc/android/android-rootfs.img`, 453488640 bytes.
 
-根文件系统的 `/init` 是 jumpercable。它还要再挂一次名为 userdata 的分区，用来放可写数据，默认这和根分区不是同一个。这次 userdata 分区本身就是 Ubuntu 根文件系统，所以 initramfs 不执行那个 `/init`，直接进入 `/sbin/init`。`vendor`、`odm` 在 `super` 的逻辑分区里，这份 initramfs 不建立 device-mapper 节点。`mount-android-partitions` 只会按分区名和 `/dev/mapper/` 去找，第一次启动时容器很可能还看不到 vendor。
+The root filesystem's `/init` is jumpercable. It wants to mount a partition named userdata a second time, for writable data, and by default that is not the same partition as the root. This time the userdata partition itself is the Ubuntu root filesystem, so the initramfs does not run that `/init`. It enters `/sbin/init` directly. `vendor` and `odm` are logical partitions in `super`. This initramfs does not create device-mapper nodes. `mount-android-partitions` only looks by partition name and under `/dev/mapper/`. On the first boot the container is likely still unable to see vendor.
 
-展开用的是 fakeroot，不需要主机 root。`mke2fs` 用的是 `/usr/sbin/mke2fs`，不是 SDK 里的那份。压缩包的属主和权限留在镜像里。安全能力（file capabilities）这次没有保留。展开目录留在 `out/halium14/rootfs-tree/`。
+The unpack used fakeroot and did not need host root. `mke2fs` is `/usr/sbin/mke2fs`, not the one in the SDK. Owners and permissions from the archive were kept in the image. File capabilities were not preserved this time. The unpacked tree was left at `out/halium14/rootfs-tree/`.
 
-产物：
+Products:
 
-- `out/halium14/userdata-ut.img`，8 GiB，ext4，卷标 `userdata`，UUID `20175c14-63c9-49f3-a991-dc8abb53545c`。空闲约 4.6 GiB，inode 用了约 7 万，共 1048576。`/usr/lib/os-release` 是 Ubuntu 24.04.5 LTS，`VARIANT=Touch`。SHA256 `5e105a81f5459d83fbcd7779a2295c91d000386e87f6050676a3f4d48f9b645b`。
-- `out/halium14/boot-ut.img`，header v3，OS 14.0.0 / 2024-12。内核是 `#5`（SHA256 `756be6253b146699794ef892762426107b502aca570c5003611e7c66c8c6fb98`），ramdisk 745443 字节、lz4。整个 boot 47 MiB，小于 128 MiB。SHA256 `d7f4a8ec27235166b1e05dd3b916fb17004853a630fb99fefa8e4adf5c95a9ab`。
+- `out/halium14/userdata-ut.img`, 8 GiB, ext4, label `userdata`, UUID `20175c14-63c9-49f3-a991-dc8abb53545c`. About 4.6 GiB free. About 70,000 inodes used, out of 1048576. `/usr/lib/os-release` is Ubuntu 24.04.5 LTS, `VARIANT=Touch`. SHA256 `5e105a81f5459d83fbcd7779a2295c91d000386e87f6050676a3f4d48f9b645b`.
+- `out/halium14/boot-ut.img`, header v3, OS 14.0.0 / 2024-12. The kernel is `#5` (SHA256 `756be6253b146699794ef892762426107b502aca570c5003611e7c66c8c6fb98`), ramdisk 745443 bytes, lz4. The whole boot is 47 MiB, under 128 MiB. SHA256 `d7f4a8ec27235166b1e05dd3b916fb17004853a630fb99fefa8e4adf5c95a9ab`.
 
-手机现在仍是第 6 项的 Android 14，槽位 `_b`，`boot_b` 是 `#5` 内核加 Android ramdisk。`vendor_boot_b`、`dtbo_b`、`vbmeta`、`super` 不动。下一次人工测试才写入；用户把手机送进 fastboot 并确认可以覆盖 userdata 之后：
+The phone is still the Android 14 from item 6, slot `_b`. `boot_b` is the `#5` kernel plus the Android ramdisk. `vendor_boot_b`, `dtbo_b`, `vbmeta`, and `super` stay as they are. They are written only at the next manual test. After the user puts the phone into fastboot and confirms userdata may be overwritten:
 
 1. `fastboot flash userdata out/halium14/userdata-ut.img`
 2. `fastboot flash boot_b out/halium14/boot-ut.img`
-3. `fastboot reboot`，由用户看屏幕。
+3. `fastboot reboot`, and the user looks at the screen.
 
-没有进系统、停在 logo 或回到 fastboot 时，先读日志，不连续重刷。回到 Android 14 时，`boot_b` 写回 `out/halium14/boot.img`，userdata 还要在 recovery 里重新格式化成加密 f2fs。
+If it does not enter the system, sticks on the logo, or returns to fastboot, read logs first. Do not reflash in a loop. To return to Android 14, write `out/halium14/boot.img` back to `boot_b`, and userdata still has to be reformatted as encrypted f2fs in recovery.
 
-### 事件
+### Events
 
-- 按挂载脚本改了 `android-rootfs.img` 的落点，不再用 `/system/var/...`。
-- 做成 8 GiB 的 ext4 和 47 MiB 的 boot。没有执行 fastboot，没有重启。
-- 2026-11-09 用户把手机送进 fastboot。`current-slot` 是 `b`，`unlocked: yes`。`fastboot flash userdata` 先报 `Invalid sparse file format at header magic`，随后把 raw ext4 分成 5 段发出，每段 Writing 都是 OKAY，总时间 90.9 秒。`boot_b` 写入 `out/halium14/boot-ut.img` 也是 OKAY。槽位仍是 `_b`。`vendor_boot`、`dtbo`、`vbmeta`、`super` 没有动。然后 `fastboot reboot`。由用户看屏幕。
-- 手机停在 Redmi 第一屏，USB 上没有任何设备，用户手动回到 fastboot。随后写入的 `boot-ut-logs.img`（先挂 ext4 再开 ACM 串口）同样停在第一屏，主机内核日志（`journalctl -k` 可读）里也没有任何枚举。
-- 根因在 ramdisk 的目录骨架，不在内核。header v3 启动时 bootloader 把 vendor ramdisk 和 boot ramdisk 拼在一起解开。Droidian 那次用的是 crDroid 16 的 `vendor_boot`，它的 vendor ramdisk 自带完整 Android 根目录（`proc`、`sys`、`dev`、`tmp` 等）。现在槽位里的 Android 14 `vendor_boot` 只有 `first_stage_ramdisk/` 和 `lib/`；我们的 busybox cpio 也只有 `bin/` 和 `init`。于是 `/proc`、`/sys`、`/dev` 三个挂载点都不存在，挂载全部失败，也没有 `/dev/console`。没有 `/sys/class/block` 就找不到 userdata，init 进了看不见的 `sh`；没有 `/sys/class/udc` 日志镜像也开不了 USB。Android 14 自己的 boot ramdisk 带有这些目录，所以同一个内核加同一个 `vendor_boot` 能进 Android。Droidian 能进第二屏，是因为碰巧借到了 crDroid 16 vendor ramdisk 的目录。内核驱动不是原因：vendor ramdisk 里的 UFS、时钟、pinctrl 模块在 `#5` 里都是内建的。
-- 修正：`build-boot-image.sh` 在 cpio 里放入 `proc`、`sys`、`dev`、`tmp`、`config`、`newroot` 等目录，并用 fakeroot 做出 `dev/console`、`dev/null`，不需要主机 root。init 在挂载前也会 `mkdir -p`。init 失败时不再进静默 shell，而是开 `0525:a4a7`（产品名 `boot-fail`）串口循环送出报告和 dmesg；`switch_root` 前把 initramfs 的报告和 dmesg 写到 userdata 根目录的 `stone-initramfs-report.txt`、`stone-initramfs-dmesg.txt`。
-- 新的 `boot-ut.img`（ramdisk 746261 字节，lz4，SHA256 `76fcd43d0d52bb51968e8bf36ab7a5dcc8e8a87542f6df10e81b4a5c880a701b`）写入 `boot_b` 并重启，槽位 `_b`，其它分区没动。离开 fastboot 后 90 秒内主机没有看到任何 USB 设备，也没有 `boot-fail` 串口。UT 的 `usb-moded` 默认模式可能根本不开 gadget，所以这还不能区分「systemd 已经起来」和「init 仍然失败」。
-- 另打了 `out/halium14/boot-ut-disk.img`（SHA256 `151292b6fc31de170b487da1936b6a3656773eec30d444c05750a606027406df`），尚未写入：读写挂上 userdata 让 ext4 回放，把 `journalctl -b -1`、全部 journal、启动列表和 dmesg 写到 `/stone-logs/`，再把 userdata 只读导出成 U 盘（`1d6b:0104`，`stone-userdata`）。根文件系统的 journal 是持久的（有 `/var/log/journal`，没有 volatile 覆盖）。
-- 用户确认仍停在 Redmi 第一屏，并回到 fastboot。写入 `boot-ut-disk.img`，离开 fastboot 8 秒后出现 `1d6b:0104` U 盘，主机 `udisksctl` 只读挂上 `/dev/sdb`（103.5G，卷标 userdata）。说明修正后的 ramdisk 在 `#5` 内核上能跑，USB gadget 也能用。
-- `stone-initramfs-report.txt` 存在：init 在内核 2.0 秒找到 `/dev/sda19`、挂上 ext4 并 `switch_root`。`journalctl --list-boots` 只列出 10 月 12 日打包时的那次启动，因为手机时钟是 1970 年，新的 journal 排在前面被忽略。按 1970 年的修改时间找到这次启动写下的 journal 文件，用主机的 `journalctl --file` 读出：systemd 正常运行，2.5 秒 journal 落盘、`local-fs.target` 达成。`mount-android-partitions` 报 `Hmm... can't guess a partition for /android/vendor`。随后 `lxc-android-config.service` 的 start-post 等到 93 秒超时，`systemd-udev-trigger` 排在它之后才开始。没有 vendor 就没有 Android 容器和 hwcomposer，Lomiri 画不出来；内核没有 fbcon，cmdline 也没有 `splash`，Plymouth 不启动。所以屏幕一直是 bootloader 的 Redmi 图。
-- 这就是前面记下的已知缺口：`vendor`、`odm` 在 `super` 的逻辑分区里。`common.sh` 的 `find_partition_path` 先找 `/dev/mapper/<名字>` 和 `/dev/mapper/<名字>_b`。新增 `boot/ut-init/stone-dynparts.py`：按 liblp 格式读 `super` 的几何信息和 metadata slot 1（`_b`），跳过 `_a` 和 `-cow`，用 `dmsetup create --readonly --noudevsync`（`DM_DISABLE_UDEV=1`）建出 `/dev/mapper/vendor_b`、`odm_b` 等。init 在把 `/proc`、`/sys`、`/dev` 移进新根之后、`switch_root` 之前，`chroot` 进 Ubuntu 根文件系统用它自带的 `python3` 和 `dmsetup` 执行，结果写到 userdata 根目录的 `stone-dynparts.txt`。在主机上用按同一格式构造的假 `super` 和假 `dmsetup` 验证过表的解析。
-- vendor cmdline 末尾有 `ro`，`/` 没有 fstab 项时 systemd 会按它重新挂成只读。boot 镜像 header 的 cmdline 加上 `rw splash`。
-- `boot-ut-trace.img`（cmdline 另加 `printk.devkmsg=on`，SHA256 `a5b9b86e658deaf4461caf868c216071227e136a18d9c7521fe18c3503c51773`）：`switch_root` 进 `/stone/init-wrapper`，它在后台每 3 秒把 dmesg、进程表、systemd 任务、失败单元和本次 journal 写到 `/stone-logs/live/` 并 sync，然后 `exec` systemd。约 3 分钟后自己重启进 bootloader。新的 `boot-ut-disk.img`（SHA256 `ba5880a379d4d7c2e776be91c82f028fd8480498607c596519e88339418f6109`）在主机弹出 U 盘后也会自己回 bootloader。两者都带 `reboot-bootloader`（无 libc，`reboot(..., "bootloader")`）。正常启动用的 `boot-ut.img` 同样带 dynparts 和 `rw splash`，SHA256 `012d829f9ccacd7c2e3ff8e8a1312d175b0d4406486cc19ec8a83fac8ad871f4`。都还没写入。
-- 第一次 trace：`stone-dynparts.py` 正确读出 `super`（`/dev/sda8`，LP metadata 10.2，3 个 slot），但 chroot 里 `PATH` 还是 initramfs 的 `/bin`，找不到 `/usr/sbin/dmsetup`。改成绝对路径并显式设 `PATH`。`init-disk` 里的 `chmod 644 stone-logs/*` 去掉了 `live/` 目录的执行位，改成 `chmod -R a+rX`，并把只有 root 能读的 lightdm 日志一起复制出来。
-- 教训：在主机上用 `udisksctl power-off` 弹出手机 U 盘会把主机 USB 口 1-9 断电，恢复要 root，只能重插线。以后只用 udisks 的 `Drive.Eject`（gdbus 调用）。
-- vendor 映射成功后容器进入 RUNNING。`#5` 内核没有 `SECURITY_SELINUX_BOOTPARAM`，cmdline 关不掉 SELinux；也没有 AppArmor，UT 的应用隔离无从加载。`kernel/config/halium-sunstone.fragment` 加上 `SECURITY_SELINUX_BOOTPARAM`、`SECURITY_APPARMOR`、`USB_CONFIGFS_RNDIS`，打出 `#6`（存为 `out/halium14/Image-6`；`#5` 存为 `Image-5`）。boot cmdline 改为 `rw splash selinux=0 security=apparmor apparmor=1`，trace 另加 `printk.devkmsg=on`。手机上确认 SELinux 已关闭、AppArmor 已初始化。`#6`、`#7` 都还没在 Android 14 上测过。
-- vendor 的 `vndservicemanager` 在 `Access::Access()` 里 `CHECK(selinux_status_open)` 失败就 abort。改用系统的 servicemanager 不行：系统 libbinder 的 parcel 头是 `SYST`（0x53595354），vendor 客户端发的是 `VNDR`（0x564e4452），系统那份服务不了 `/dev/vndbinder`。新增 `boot/ut-init/stone-vendor-fixups.py`：每次启动在 chroot 里只读挂上 `/dev/mapper/vendor_b`，核对 `bin/vndservicemanager` 的 SHA256（`bf6653db5e1384920732aa2f64a0de2abc297341d4b7775f950d0556b21b4a4f`，crDroid 10.11）和原字节，把文件偏移 0x6128 的 `tbnz`（`8001f837`，`selinux_status_open` 失败分支）和 0x6134 的 `cbnz`（`c0030035`，`getcon` 失败分支）换成 NOP `1f2003d5`，写到 halium overlay。其余 SELinux 调用在 SELinux 关闭时返回「允许」，`getpidcon` 借 AppArmor 的标签能用。手机上输出 `bin/vndservicemanager: patched 2 sites`。
-- halium overlay：`mount-halium-overlay.service` 在 `mount-android-partitions` 之后、lxc 之前，把 `/android/system/halium`、`/android/system/ubuntu`、`/opt/halium-overlay/`、`/usr/share/halium-overlay/` 下的每个文件绑定到 `/` 下的同一路径（目标必须存在）。UT 镜像本身没有 `/usr/share/halium-overlay`。新增 `boot/ut-init/rootfs-overlay/`，init 每次启动先删掉旧的 `/usr/share/halium-overlay`，再把整棵树复制进根文件系统。
-- 打开 vendor 的 `vndservicemanager` 后，所有 vndbinder 事务都失败（`transaction failed 29201/-22`，binder.c 第 3324 行）。vendor 的 servicemanager 设了 `FLAT_BINDER_FLAG_TXN_SECURITY_CTX`，5.4 上只有 AppArmor 时 secid 为 0，`security_secid_to_secctx` 返回 -EINVAL，binder 直接让事务失败。`kernel/patches/0002-binder-send-without-secctx-when-lsm-has-none.patch`：返回 -EINVAL 或 -EOPNOTSUPP 时不带安全上下文继续发送，接收方拿不到 SID，回退到 `getpidcon()`。打出 `#7`：`kernel/build-14/arch/arm64/boot/Image`，47999488 字节，SHA256 `0ac98a87c24ad8dc64219de411bd7f1c8bd2f286906600eafd031ff5fd0a2c40`，`#7 SMP PREEMPT Mon Nov 9 18:22:33 EST 2026`。之后 composer 注册了 `display.qservice` 并保持运行。
-- USB：`CONFIG_USB_DUMMY_HCD=y` 让 `dummy_udc.0` 先于 `4e00000.dwc3` 注册，usb-moded 选错了控制器，主机上看不到设备。overlay 里加 `etc/default/usb-moded.d/stone-sunstone.conf`（`CONTROLLER=4e00000.dwc3`）和 `etc/usb-moded/91-stone-sunstone.ini`（`gadget_udc_device = 4e00000.dwc3`）。vendor 的 `init.qcom.usb.rc` 会建 `g1/configs/b.1`，和 usb-moded 的 `c.1` 冲突（EBUSY），用 overlay 换成只有注释的空文件。usb-moded 带 `-r` 运行时进 developer_mode：RNDIS 地址 10.15.19.82，udhcpd 发地址，`usb-moded-ssh` 监听 10.15.19.82:8022。构建时把主机的 `~/.ssh/id_ed25519.pub`（可用 `SSH_PUBKEY` 指定）放进 overlay 的 `home/phablet/.ssh/authorized_keys`，公钥不进仓库。内核没有 f_mtp，`mtp.mtp` 不存在；`ethaddr`、`wceis` 报错只是 Mer 的属性名，不影响 RNDIS。
-- trace 镜像另带 `/etc/sudoers.d/stone-trace`（phablet 免密 sudo），正常镜像启动时会删掉这个文件。`stone-init-wrapper` 改成前 3 分钟每 3 秒快照，之后每 30 秒，20 分钟后回 bootloader；`sudo /stone/reboot-bootloader` 可立刻回。phablet 用户在 `/var/lib/extrausers`，属于 sudo 组，密码未知。
-- 调试：手机上 USC（Mir 1.8.2，graphics-android2）在 Adreno 619 上初始化 EGL，认出 1080x2400 屏，转圈动画能画出来，lightdm 也拉起了 greeter。但 `lomiri --mode=full-greeter`（phablet 的用户服务 `lomiri-full-greeter.service`）在 `mirserver: Starting` 后约 0.5 秒段错误。从 ports.ubuntu.com 下了 noble 的 arm64 gdb 放到 `/tmp/gdb`，开 core dump 后回溯：`strchr` ← `strstr` ← Android `/system/lib64/libEGL.so` 的 `egl_display_t::initialize`（+0x18d14，`ldr x0,[x20,#0x30]`，读扩展字符串）。限制 glvnd 只用 hybris 后仍崩，和 Mesa 无关。
-- 根因：拿正常运行的 USC 的 `egl_display_t` 对比，`+0x00` 是 `_dpy` 魔数，`+0x08` 是句柄，`+0x10` 是状态 1（已初始化），`+0x18`…`+0x30` 指向 "Qualcomm Inc."、"1.5"、"OpenGL_ES" 和扩展串。Lomiri 那份状态是 0，这几格是未初始化的堆数据：Adreno 自己的 `eglInitialize` 失败了，Android libEGL 随后对没赋值的扩展指针调用 `strstr`。USC 以 root 运行，Lomiri 以 phablet 运行，而 `/dev/kgsl-3d0`、`/dev/ion` 都是 `crw------- root root`。UT 移植通常按 Android 的 `ueventd.rc` 生成 udev 规则，这里还没有。
-- 修正：新增 `tools/ueventd-to-udev.py`，把 `/system/etc/ueventd.rc` 和 `/vendor/etc/ueventd.rc` 的 `/dev` 项转成 udev 规则。用户和组写数字 AID（UT 里这些组叫 `android_*`，Android 的名字解析不了），`oem_NNNN` 直接取数字，用 `ENV{DEVNAME}` 匹配完整路径，后面的文件覆盖前面的。结果是 `boot/ut-init/rootfs-overlay/etc/udev/rules.d/70-sunstone.rules`，249 条。在手机上装进去并 `udevadm trigger --action=add`，`/dev/kgsl-3d0` 变成 0666、`/dev/ion` 变成 0664（属主 system）。重启 lightdm 后 `lomiri --mode=full-greeter` 保持运行，没有新的 core，日志里有 `Last frame took 66 ms to render`，lomiri-polkit-agent 也注册上了。
-- 仍未解决、不阻塞：apparmor.service 在 5.4 上加载 profile 失败；mediaextractor、qcrilNrd 反复崩溃；bluebinder 失败；主机侧 libgbinder 客户端报 parcel 头 0x6e0061；lomiri-push-service 起不来 `com.ubports.SystemImage`（Permission denied）；没有 f_mtp。
-- 当前镜像（都是 `#7` 内核，带上面全部修正，前面各条里的镜像 SHA256 都已过时）：`boot-ut.img` `40050592a624254a98b59bb52c3d60225237349ed70cda45b60647461ba79d71`，`boot-ut-trace.img` `c1edcee521aa0220382bdff3fa4581969153bf8f9949a15d78811ca059caebc1`，`boot-ut-disk.img` `13102777c80e72f8e134b135bb666f26d99b184c627ff88208494d640deeed81`。手机此刻跑的是上一版 trace 镜像，udev 规则是在线装进 `/etc/udev/rules.d/` 的，下次由用户看屏幕。
-- 用户回到 fastboot 后写入带 udev 规则的 trace 镜像。冷启动后 15 秒有 SSH，`/dev/kgsl-3d0` 已是 0666，Lomiri 正常运行、没有 core。`mirscreencast -m /run/mir_socket -n 1` 能截一帧 1080x2400 RGBA（要加 `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=4194304`，否则 hybris 的 `q.so` 报 static TLS 不够；phablet 用户也能截）。画面是 Lomiri 首次启动向导的「Language」页，状态栏有 Wi-Fi、电量和时钟。触摸屏 `fts_ts`（`event3`）、电源键、音量键都被 USC 打开，Lomiri 日志有 `Input device added: "fts_ts" ... TouchScreen`。
-- `apparmor.service` 失败的原因：`ExecStartPre` 的 `wipe-aa-cache-on-channel-switch.py`（lxc-android-config）在不是 system-image 安装的系统上返回 1。手动 `apparmor.systemd reload` 可以加载 159 个 profile。overlay 加 `etc/systemd/system/apparmor.service.d/stone-no-system-image.conf`，把 `ExecStartPre` 改成 `-` 前缀忽略失败，服务变为 active。
-- 展开根文件系统时 tar 按名字映射属主，用了主机的 ID：`messagebus` 106→995（`dbus-daemon-launch-helper` 失去 messagebus 组，系统总线激活一律 Permission denied，lomiri-push-service 起不来），`clickpkg` 107→102（`/usr/share/click` 下预装应用 5847 项变成 crontab 组），`syslog` 103→992（`/var/log`），`systemd-journal` 105→109（`/var/log/journal` 变成 rtkit 组），`/var/lib/usermetrics` 104→991。另外 `ping`（`cap_net_raw`）和 `gst-ptp-helper`（`cap_net_bind_service,cap_net_admin,cap_sys_nice`）的文件能力丢了。手机上按压缩包的数字 ID 修正了 5850 项（保留 setuid 位）并补回两个能力，`com.ubports.SystemImage` 能激活，lomiri-push-service 变为 active，phablet 能 ping。`build-userdata-image.sh` 改用 `tar --numeric-owner`，mke2fs 之后用 `debugfs ea_set` 写入压缩包里的 `security.capability`。重建的 `userdata-ut.img` SHA256 `382c9ff049bae13168a6dca8d42600446bba9fae15e8861df0f06b487a3ae551`，用 debugfs 核对过属主和能力，没有写入（手机上的 userdata 已就地修好）。
-- 用户服务 `audiosystem-passthrough-qti`（IQcRilAudio，通话音频）找到 hwbinder 服务管理器后以状态 2 退出，留到通话阶段再查。
-- 当前镜像：`boot-ut.img` `7817dbfd45d4fa86b8a977f6504ba11ceb66aabc64b0b7b1c3884ea4596ef264`，`boot-ut-trace.img` `5da875e07435848fb10dc3213a949eb4c4856c1849a7e792d14582fdce580365`，`boot-ut-disk.img` `3c1123f228b93116dbe94f325fa731ac3e34ef9826299535985601d01faebd02`。`boot_b` 已写入正常的 `boot-ut.img`（没有免密 sudo，不会 20 分钟后自动重启）。启动 73 秒时 Lomiri 在跑、AppArmor active、没有失败的系统单元，截图仍是向导第一页。usb-moded 的 `-r` 来自根文件系统配置，正常镜像下 phablet 仍可用公钥 SSH 到 10.15.19.82:8022。下一步由用户在屏幕上操作向导、测试触摸。手机时钟仍是 1970 年。
-- 2026-11-09 用户确认 Ubuntu Touch 已经进到桌面：显示、触摸、GPU、亮度、充电感应、振动正常，adb 连着（`stone`）。Wi-Fi、蓝牙、SIM、相机、声音和内置存储容量未好。Halium 14 这条线到此为止，剩下的记在 `docs/roadmap-hardware.md`。
+- Moved where `android-rootfs.img` lands, following the mount script, and no longer using `/system/var/...`.
+- Built an 8 GiB ext4 and a 47 MiB boot. fastboot was not run, and the phone was not rebooted.
+- 2026-11-09: the user put the phone into fastboot. `current-slot` was `b`, `unlocked: yes`. `fastboot flash userdata` first reported `Invalid sparse file format at header magic`, then sent the raw ext4 in 5 chunks. Every Writing was OKAY. Total time 90.9 seconds. Writing `out/halium14/boot-ut.img` to `boot_b` was also OKAY. The slot was still `_b`. `vendor_boot`, `dtbo`, `vbmeta`, and `super` were not touched. Then `fastboot reboot`. The user looks at the screen.
+- The phone stuck on the Redmi first splash. There was no USB device. The user returned to fastboot by hand. The `boot-ut-logs.img` written next (mount ext4 first, then open an ACM serial port) also stuck on the first splash, and the host kernel log (`journalctl -k` is readable) had no enumeration either.
+- The root cause is the ramdisk directory skeleton, not the kernel. On a header v3 boot the bootloader concatenates the vendor ramdisk and the boot ramdisk and unpacks them together. The Droidian attempt used crDroid 16's `vendor_boot`, whose vendor ramdisk already has a full Android root (`proc`, `sys`, `dev`, `tmp`, and so on). The Android 14 `vendor_boot` now in the slot has only `first_stage_ramdisk/` and `lib/`. Our busybox cpio also had only `bin/` and `init`. So the `/proc`, `/sys`, and `/dev` mount points did not exist, every mount failed, and there was no `/dev/console`. Without `/sys/class/block`, userdata could not be found, and init entered an invisible `sh`. Without `/sys/class/udc`, the log image could not bring USB up either. Android 14's own boot ramdisk has these directories, so the same kernel plus the same `vendor_boot` can enter Android. Droidian could reach the second splash because it happened to borrow the directories from the crDroid 16 vendor ramdisk. The kernel drivers are not the cause: the UFS, clock, and pinctrl modules in the vendor ramdisk are built into `#5`.
+- Fix: `build-boot-image.sh` puts `proc`, `sys`, `dev`, `tmp`, `config`, `newroot`, and similar directories into the cpio, and uses fakeroot to create `dev/console` and `dev/null`. Host root is not required. init also `mkdir -p`s before mounting. On failure, init no longer enters a silent shell. It opens a `0525:a4a7` serial port (product name `boot-fail`) and loops the report and dmesg. Before `switch_root` it writes the initramfs report and dmesg to `stone-initramfs-report.txt` and `stone-initramfs-dmesg.txt` at the userdata root.
+- The new `boot-ut.img` (ramdisk 746261 bytes, lz4, SHA256 `76fcd43d0d52bb51968e8bf36ab7a5dcc8e8a87542f6df10e81b4a5c880a701b`) was written to `boot_b` and the phone rebooted. Slot `_b`. The other partitions were not touched. For 90 seconds after leaving fastboot the host saw no USB device and no `boot-fail` serial port. UT's `usb-moded` default mode may not open a gadget at all, so this still cannot tell "systemd is already up" from "init is still failing."
+- Separately built `out/halium14/boot-ut-disk.img` (SHA256 `151292b6fc31de170b487da1936b6a3656773eec30d444c05750a606027406df`), not yet written: mount userdata read-write so ext4 can replay, write `journalctl -b -1`, the whole journal, the boot list, and dmesg to `/stone-logs/`, then export userdata read-only as a USB disk (`1d6b:0104`, `stone-userdata`). The root filesystem's journal is persistent (there is `/var/log/journal`, and no volatile override).
+- The user confirmed it was still stuck on the Redmi first splash and returned to fastboot. `boot-ut-disk.img` was written. Eight seconds after leaving fastboot, a `1d6b:0104` USB disk appeared. The host `udisksctl` mounted `/dev/sdb` read-only (103.5G, label userdata). That shows the corrected ramdisk runs on the `#5` kernel, and the USB gadget works.
+- `stone-initramfs-report.txt` exists: at kernel time 2.0 seconds, init found `/dev/sda19`, mounted ext4, and `switch_root`ed. `journalctl --list-boots` listed only the boot from when the image was packed on October 12, because the phone clock is in 1970 and the new journal sorts in front and is ignored. The journal file written by this boot was found by its 1970 modification time and read with the host's `journalctl --file`: systemd was running normally, the journal hit disk at 2.5 seconds, and `local-fs.target` was reached. `mount-android-partitions` reported `Hmm... can't guess a partition for /android/vendor`. The start-post of `lxc-android-config.service` then waited until a 93-second timeout, and only after that did `systemd-udev-trigger` begin. Without vendor there is no Android container and no hwcomposer, so Lomiri cannot draw. The kernel has no fbcon, the command line has no `splash`, and Plymouth does not start. So the screen stays on the bootloader's Redmi picture.
+- This is the known gap recorded earlier: `vendor` and `odm` are logical partitions in `super`. `find_partition_path` in `common.sh` looks first for `/dev/mapper/<name>` and `/dev/mapper/<name>_b`. Added `boot/ut-init/stone-dynparts.py`: it reads `super`'s geometry and metadata slot 1 (`_b`) in liblp format, skips `_a` and `-cow`, and uses `dmsetup create --readonly --noudevsync` (`DM_DISABLE_UDEV=1`) to create `/dev/mapper/vendor_b`, `odm_b`, and the rest. After init has moved `/proc`, `/sys`, and `/dev` into the new root, and before `switch_root`, it `chroot`s into the Ubuntu root filesystem and runs this with the python3 and dmsetup that rootfs already has. The result is written to `stone-dynparts.txt` at the userdata root. Parsing of the table was checked on the host with a fake `super` and a fake `dmsetup` built in the same format.
+- The vendor command line ends with `ro`. When `/` has no fstab entry, systemd remounts it read-only from that. The boot image header command line gained `rw splash`.
+- `boot-ut-trace.img` (command line also adds `printk.devkmsg=on`, SHA256 `a5b9b86e658deaf4461caf868c216071227e136a18d9c7521fe18c3503c51773`): `switch_root` into `/stone/init-wrapper`. In the background, every 3 seconds, it writes dmesg, the process table, systemd jobs, failed units, and this boot's journal to `/stone-logs/live/` and syncs, then `exec`s systemd. After about 3 minutes it reboots into the bootloader by itself. The new `boot-ut-disk.img` (SHA256 `ba5880a379d4d7c2e776be91c82f028fd8480498607c596519e88339418f6109`) also returns to the bootloader by itself after the host ejects the USB disk. Both carry `reboot-bootloader` (no libc, `reboot(..., "bootloader")`). The `boot-ut.img` used for a normal boot also carries dynparts and `rw splash`, SHA256 `012d829f9ccacd7c2e3ff8e8a1312d175b0d4406486cc19ec8a83fac8ad871f4`. None of them had been written yet.
+- First trace: `stone-dynparts.py` correctly read `super` (`/dev/sda8`, LP metadata 10.2, 3 slots), but `PATH` inside the chroot was still the initramfs `/bin`, so it could not find `/usr/sbin/dmsetup`. Changed to an absolute path and set `PATH` explicitly. `chmod 644 stone-logs/*` in `init-disk` removed the execute bit from the `live/` directory. Changed to `chmod -R a+rX`, and also copied out the lightdm log, which only root could read.
+- Lesson: ejecting the phone's USB disk on the host with `udisksctl power-off` powers off host USB port 1-9. Recovering that needs root and means replugging the cable. From then on, only udisks `Drive.Eject` (a gdbus call).
+- After the vendor mapping succeeded, the container entered RUNNING. Kernel `#5` has no `SECURITY_SELINUX_BOOTPARAM`, so the command line cannot turn SELinux off. It also has no AppArmor, so UT's application confinement has nothing to load. `kernel/config/halium-sunstone.fragment` gained `SECURITY_SELINUX_BOOTPARAM`, `SECURITY_APPARMOR`, and `USB_CONFIGFS_RNDIS`, and `#6` was built (saved as `out/halium14/Image-6`; `#5` saved as `Image-5`). The boot command line became `rw splash selinux=0 security=apparmor apparmor=1`. The trace image also adds `printk.devkmsg=on`. On the phone, SELinux was confirmed off and AppArmor initialized. Neither `#6` nor `#7` has been tested on Android 14 yet.
+- The vendor `vndservicemanager` `CHECK(selinux_status_open)` fails inside `Access::Access()` and aborts. Using the system servicemanager does not work: the system libbinder parcel header is `SYST` (0x53595354), vendor clients send `VNDR` (0x564e4452), and the system one cannot serve `/dev/vndbinder`. Added `boot/ut-init/stone-vendor-fixups.py`: on every boot, inside the chroot, it mounts `/dev/mapper/vendor_b` read-only, checks the SHA256 of `bin/vndservicemanager` (`bf6653db5e1384920732aa2f64a0de2abc297341d4b7775f950d0556b21b4a4f`, crDroid 10.11) and the original bytes, and replaces the `tbnz` at file offset 0x6128 (`8001f837`, the `selinux_status_open` failure branch) and the `cbnz` at 0x6134 (`c0030035`, the `getcon` failure branch) with NOP `1f2003d5`, written into the halium overlay. The remaining SELinux calls return "allow" when SELinux is off, and `getpidcon` works by borrowing AppArmor's label. The phone printed `bin/vndservicemanager: patched 2 sites`.
+- Halium overlay: `mount-halium-overlay.service` runs after `mount-android-partitions` and before lxc. It bind-mounts every file under `/android/system/halium`, `/android/system/ubuntu`, `/opt/halium-overlay/`, and `/usr/share/halium-overlay/` onto the same path under `/` (the target must exist). The UT image itself has no `/usr/share/halium-overlay`. Added `boot/ut-init/rootfs-overlay/`. On every boot, init deletes the old `/usr/share/halium-overlay` and copies the whole tree into the root filesystem.
+- After the vendor `vndservicemanager` was opened, every vndbinder transaction failed (`transaction failed 29201/-22`, binder.c line 3324). The vendor servicemanager sets `FLAT_BINDER_FLAG_TXN_SECURITY_CTX`. On 5.4 with only AppArmor, the secid is 0, `security_secid_to_secctx` returns -EINVAL, and binder fails the transaction outright. `kernel/patches/0002-binder-send-without-secctx-when-lsm-has-none.patch`: when the return is -EINVAL or -EOPNOTSUPP, keep sending without a security context. The receiver gets no SID and falls back to `getpidcon()`. Built `#7`: `kernel/build-14/arch/arm64/boot/Image`, 47999488 bytes, SHA256 `0ac98a87c24ad8dc64219de411bd7f1c8bd2f286906600eafd031ff5fd0a2c40`, `#7 SMP PREEMPT Mon Nov 9 18:22:33 EST 2026`. After that, the composer registered `display.qservice` and stayed running.
+- USB: `CONFIG_USB_DUMMY_HCD=y` makes `dummy_udc.0` register before `4e00000.dwc3`. usb-moded picks the wrong controller, and the host sees no device. The overlay adds `etc/default/usb-moded.d/stone-sunstone.conf` (`CONTROLLER=4e00000.dwc3`) and `etc/usb-moded/91-stone-sunstone.ini` (`gadget_udc_device = 4e00000.dwc3`). The vendor `init.qcom.usb.rc` creates `g1/configs/b.1`, which conflicts with usb-moded's `c.1` (EBUSY). The overlay replaces it with an empty file that contains only a comment. When usb-moded runs with `-r` it enters developer_mode: RNDIS address 10.15.19.82, udhcpd hands out addresses, and `usb-moded-ssh` listens on 10.15.19.82:8022. At build time the host's `~/.ssh/id_ed25519.pub` (overridable with `SSH_PUBKEY`) is placed in the overlay's `home/phablet/.ssh/authorized_keys`. The public key does not go into the repository. The kernel has no f_mtp, so `mtp.mtp` does not exist. The `ethaddr` and `wceis` errors are only Mer property names and do not affect RNDIS.
+- The trace image also carries `/etc/sudoers.d/stone-trace` (passwordless sudo for phablet). A normal-image boot deletes that file. `stone-init-wrapper` now snapshots every 3 seconds for the first 3 minutes, then every 30 seconds, and returns to the bootloader after 20 minutes. `sudo /stone/reboot-bootloader` returns immediately. The phablet user is in `/var/lib/extrausers`, is in the sudo group, and the password is unknown.
+- Debugging: on the phone, USC (Mir 1.8.2, graphics-android2) initialized EGL on the Adreno 619, recognized the 1080x2400 screen, the spinner animation could be drawn, and lightdm also started the greeter. But `lomiri --mode=full-greeter` (phablet's user service `lomiri-full-greeter.service`) segfaulted about 0.5 seconds after `mirserver: Starting`. noble's arm64 gdb was downloaded from ports.ubuntu.com to `/tmp/gdb`. After core dumps were enabled, the backtrace was `strchr` ← `strstr` ← `egl_display_t::initialize` in Android `/system/lib64/libEGL.so` (+0x18d14, `ldr x0,[x20,#0x30]`, reading the extension string). Restricting glvnd to hybris only still crashed. This is unrelated to Mesa.
+- Root cause: compared with the `egl_display_t` of a USC that was running normally, `+0x00` is the `_dpy` magic, `+0x08` is the handle, `+0x10` is state 1 (initialized), and `+0x18` through `+0x30` point at "Qualcomm Inc.", "1.5", "OpenGL_ES", and the extension string. Lomiri's copy had state 0, and those slots were uninitialized heap data: Adreno's own `eglInitialize` had failed, and Android libEGL then called `strstr` on an extension pointer that was never assigned. USC runs as root. Lomiri runs as phablet. `/dev/kgsl-3d0` and `/dev/ion` are both `crw------- root root`. UT ports usually generate udev rules from Android's `ueventd.rc`. That had not been done here.
+- Fix: added `tools/ueventd-to-udev.py`, which turns the `/dev` entries of `/system/etc/ueventd.rc` and `/vendor/etc/ueventd.rc` into udev rules. Users and groups are written as numeric AIDs (in UT those groups are named `android_*`, and Android's names do not resolve). `oem_NNNN` takes the number directly. `ENV{DEVNAME}` matches the full path, and later files override earlier ones. The result is `boot/ut-init/rootfs-overlay/etc/udev/rules.d/70-sunstone.rules`, 249 rules. Installed on the phone and `udevadm trigger --action=add` was run. `/dev/kgsl-3d0` became 0666, and `/dev/ion` became 0664 (owner system). After restarting lightdm, `lomiri --mode=full-greeter` stayed running, there was no new core, the log had `Last frame took 66 ms to render`, and lomiri-polkit-agent registered.
+- Still unsolved, and not blocking: apparmor.service fails to load profiles on 5.4; mediaextractor and qcrilNrd crash repeatedly; bluebinder fails; a host-side libgbinder client reports parcel header 0x6e0061; lomiri-push-service cannot start `com.ubports.SystemImage` (Permission denied); there is no f_mtp.
+- Current images (all kernel `#7`, carrying every fix above; the image SHA256s in the earlier bullets are stale): `boot-ut.img` `40050592a624254a98b59bb52c3d60225237349ed70cda45b60647461ba79d71`, `boot-ut-trace.img` `c1edcee521aa0220382bdff3fa4581969153bf8f9949a15d78811ca059caebc1`, `boot-ut-disk.img` `13102777c80e72f8e134b135bb666f26d99b184c627ff88208494d640deeed81`. The phone was running the previous trace image at that moment. The udev rules had been installed live into `/etc/udev/rules.d/`. The user looks at the screen next.
+- After the user returned to fastboot, the trace image that includes the udev rules was written. Fifteen seconds after a cold boot, SSH was up, `/dev/kgsl-3d0` was already 0666, Lomiri was running normally, and there was no core. `mirscreencast -m /run/mir_socket -n 1` can capture one 1080x2400 RGBA frame (it needs `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=4194304`, otherwise hybris `q.so` reports that static TLS is not enough; the phablet user can capture too). The picture is the "Language" page of the Lomiri first-start wizard. The status bar has Wi-Fi, battery, and the clock. The touchscreen `fts_ts` (`event3`), the power key, and the volume keys are all opened by USC. The Lomiri log has `Input device added: "fts_ts" ... TouchScreen`.
+- Why `apparmor.service` failed: `ExecStartPre`'s `wipe-aa-cache-on-channel-switch.py` (lxc-android-config) returns 1 on a system that is not a system-image install. A manual `apparmor.systemd reload` can load 159 profiles. The overlay adds `etc/systemd/system/apparmor.service.d/stone-no-system-image.conf`, which prefixes `ExecStartPre` with `-` so the failure is ignored, and the service becomes active.
+- When the root filesystem was unpacked, tar mapped owners by name and used the host's IDs: `messagebus` 106→995 (`dbus-daemon-launch-helper` lost the messagebus group, so every system-bus activation is Permission denied, and lomiri-push-service cannot start), `clickpkg` 107→102 (5847 preinstalled entries under `/usr/share/click` became the crontab group), `syslog` 103→992 (`/var/log`), `systemd-journal` 105→109 (`/var/log/journal` became the rtkit group), `/var/lib/usermetrics` 104→991. Also, the file capabilities of `ping` (`cap_net_raw`) and `gst-ptp-helper` (`cap_net_bind_service,cap_net_admin,cap_sys_nice`) were lost. On the phone, 5850 entries were corrected to the numeric IDs from the archive (setuid bits kept) and the two capabilities were restored. `com.ubports.SystemImage` can activate, lomiri-push-service became active, and phablet can ping. `build-userdata-image.sh` was changed to `tar --numeric-owner`, and after mke2fs, `debugfs ea_set` writes the archive's `security.capability`. The rebuilt `userdata-ut.img` SHA256 is `382c9ff049bae13168a6dca8d42600446bba9fae15e8861df0f06b487a3ae551`. Owners and capabilities were checked with debugfs. It was not written (userdata on the phone had already been repaired in place).
+- The user service `audiosystem-passthrough-qti` (IQcRilAudio, call audio) exits with status 2 after it finds the hwbinder service manager. Left for the call-audio stage.
+- Current images: `boot-ut.img` `7817dbfd45d4fa86b8a977f6504ba11ceb66aabc64b0b7b1c3884ea4596ef264`, `boot-ut-trace.img` `5da875e07435848fb10dc3213a949eb4c4856c1849a7e792d14582fdce580365`, `boot-ut-disk.img` `3c1123f228b93116dbe94f325fa731ac3e34ef9826299535985601d01faebd02`. `boot_b` has been written with the normal `boot-ut.img` (no passwordless sudo, and it does not reboot itself after 20 minutes). At 73 seconds of boot, Lomiri was running, AppArmor was active, there were no failed system units, and the screenshot was still the first page of the wizard. usb-moded's `-r` comes from the root filesystem configuration. Under the normal image, phablet can still SSH with a public key to 10.15.19.82:8022. Next, the user operates the wizard on the screen and tests touch. The phone clock is still in 1970.
+- 2026-11-09: the user confirmed Ubuntu Touch had reached the desktop. Display, touch, GPU, brightness, charge detection, and vibration are normal, and adb is connected (`stone`). Wi-Fi, Bluetooth, SIM, camera, sound, and internal storage capacity are not done. The Halium 14 line stops here. What remains is in `docs/roadmap-hardware.md`.

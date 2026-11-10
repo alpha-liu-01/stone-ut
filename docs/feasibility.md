@@ -1,235 +1,236 @@
-# Redmi Note 12 5G（sunstone）Droidian / Ubuntu Touch 可行性
+# Feasibility of Droidian / Ubuntu Touch on the Redmi Note 12 5G (sunstone)
 
-探针时间：2026-11-09。只读，没有刷写、没有重启。ADB 序列号 `stone`。前半段是普通 `shell`，分区镜像和 `lpdump` 是用户授权 Magisk root 之后补做的。
 
-参考材料：`docs/clue.md`。下文只在实测和公开设备树对得上的地方沿用它，对不上的地方以这次探针为准。
+Probe date: 2026-11-09. Read-only: nothing was flashed and the phone was not rebooted. ADB serial `stone`. The first half used an ordinary `shell`. Partition images and `lpdump` were taken later, after the user authorized Magisk root.
 
-## 结论
+Reference: `docs/clue.md`. The text below follows it only where this probe and the public device tree agree. Where they disagree, this probe wins.
 
-这台机器值得做，而且应该按 Halium 来做，不要从主线内核或 Freedreno 起步。
+## Conclusion
 
-图形这条路比 `clue.md` 担心的更顺：正在运行的显示 HAL 仍是 HIDL Composer 2.4，GPU 用户态是 2022 年的 Adreno 619，不是 Android 16 的 AIDL HWC3。libhybris 认识这套接口。
+This machine is worth porting, and the port should be Halium. Do not start from a mainline kernel or Freedreno.
 
-真正卡住安装方式的是分区，不是 GPU。`super` 里只有 slot B 的动态分区，其余空间被 virtual A/B 的 COW 快照占满，不存在 `system_a`。slot A 上虽有一套 boot 镜像，切过去没有对应的系统分区。第一次装 Linux 会替换 crDroid 的系统，或者占用加密的 userdata。回滚靠刷回 crDroid 包和事先导出的 boot 镜像，不能靠“另一条 slot 还是好的”。
+Graphics is more favorable than `clue.md` feared. The running display HAL is still HIDL Composer 2.4, and the GPU userspace is a 2022 Adreno 619, not Android 16's AIDL HWC3. libhybris knows this interface set.
 
-仓库现在保持一个：本仓库 `stone-ut`。开始改内核时再单独 fork 内核仓库。设备树仓库先不开。
+What actually constrains the install is the partition layout, not the GPU. `super` contains only slot B's dynamic partitions. The rest is filled by virtual A/B COW snapshots, and `system_a` does not exist. Slot A has a set of boot images, but switching to it has no matching system partitions. The first Linux install replaces crDroid's system, or consumes the encrypted userdata. Rollback means flashing the crDroid package and the boot images exported beforehand. It cannot rely on "the other slot is still good."
 
-建议顺序：先 Droidian（Debian + Phosh），同一套 Halium boot 稳定后再放 Ubuntu Touch rootfs。电话、相机、指纹、深度休眠不进第一阶段。
+Keep a single repository for now: this one, `stone-ut`. Fork the kernel repository only when kernel changes start. Do not open a device-tree repository yet.
 
-## 这台机器是什么
+Suggested order: Droidian first (Debian + Phosh). Put an Ubuntu Touch rootfs on the same Halium boot only after that boot is stable. Phone, camera, fingerprint, and deep sleep stay out of the first stage.
 
-| 项目 | 实测 |
+## What this machine is
+
+| Item | Measured |
 | --- | --- |
-| 机型 | Redmi Note 12 5G，SKU `sunstone_cn` |
-| 产品 / 设备名 | `sunstone`；crDroid 设备 id 是统一树 `stone` |
-| SoC | SM4375，平台 `holi`，QTI |
-| CPU | 6× Cortex-A55（0xd05）+ 2× Cortex-A78（0xd41），arm64 |
-| GPU | Adreno 619v2，节点 `/dev/kgsl-3d0` |
-| 内存 | MemTotal 7,612,520 kB，约 8 GB 规格 |
-| 存储 | userdata 约 104 GB，已用 31 GB，空闲 72 GB；f2fs，文件级加密 |
-| 电池 | 设计容量 5000 mAh，Li-poly |
-| 屏幕 | 1080×2400，440 dpi，约 392 dpi 物理密度，OLED，60/120 Hz，圆角半径 102，顶部挖孔 |
-| 面板 | 内核命令行选定 `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`，面板名 “xiaomi m17 38 0c 0a fhd dsc video dsi panel” |
-| 系统 | crDroid 12.9，显示版本 `v12.9-20260416`，Android 16（SDK 36，`BP4A.251205.006`） |
-| 安全补丁 | system 2026-04-01，vendor 2026-02-01 |
-| 内核 | `5.4.302-qgki-g06497b244a0e`，PREEMPT，2026-04-16 15:36 EEST 编译，clang 21.0.0 |
-| 基带 | `.4.c2-00029-MANNAR_GEN_PACK-1.34701.2.35423.3` |
-| 当前槽位 | `_b` |
-| Root | Magisk 30.6。`adb shell` 仍是 uid 2000，`su` 后是 `u:r:magisk:s0` |
+| Model | Redmi Note 12 5G, SKU `sunstone_cn` |
+| Product / device name | `sunstone`; the crDroid device id is the unified tree `stone` |
+| SoC | SM4375, platform `holi`, QTI |
+| CPU | 6× Cortex-A55 (0xd05) + 2× Cortex-A78 (0xd41), arm64 |
+| GPU | Adreno 619v2, node `/dev/kgsl-3d0` |
+| Memory | MemTotal 7,612,520 kB, about an 8 GB part |
+| Storage | userdata about 104 GB, 31 GB used, 72 GB free; f2fs, file-based encryption |
+| Battery | 5000 mAh design capacity, Li-poly |
+| Screen | 1080×2400, 440 dpi, about 392 dpi physical density, OLED, 60/120 Hz, corner radius 102, punch-hole at the top |
+| Panel | Kernel command line selects `qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`. Panel name "xiaomi m17 38 0c 0a fhd dsc video dsi panel" |
+| System | crDroid 12.9, display version `v12.9-20260416`, Android 16 (SDK 36, `BP4A.251205.006`) |
+| Security patch | system 2026-04-01, vendor 2026-02-01 |
+| Kernel | `5.4.302-qgki-g06497b244a0e`, PREEMPT, built 2026-04-16 15:36 EEST, clang 21.0.0 |
+| Baseband | `.4.c2-00029-MANNAR_GEN_PACK-1.34701.2.35423.3` |
+| Current slot | `_b` |
+| Root | Magisk 30.6. `adb shell` is still uid 2000; after `su` it is `u:r:magisk:s0` |
 | SELinux | Enforcing |
 
-`ro.product.first_api_level` 和 `ro.vendor.api_level` 都是 31，说明出厂基线是 Android 12。正在运行的 vendor 镜像却是 crDroid 按 SDK 36 编出来的，指纹字符串仍写着 `Redmi/sunstone/sunstone:14/UKQ1.240624.001/OS2.0.6.0.UMQCNXM`。看 HAL 版本，不要看这串指纹。
+Both `ro.product.first_api_level` and `ro.vendor.api_level` are 31, so the factory baseline is Android 12. The running vendor image was built by crDroid for SDK 36, and the fingerprint string still says `Redmi/sunstone/sunstone:14/UKQ1.240624.001/OS2.0.6.0.UMQCNXM`. Read HAL versions, not that fingerprint.
 
-公开设备树 `crdroidandroid/android_device_xiaomi_stone` 的 `16.0` 分支写着：`TARGET_KERNEL_CONFIG := moonstone_defconfig`，`TARGET_KERNEL_SOURCE := kernel/xiaomi/sm6375`，`BOARD_BOOT_HEADER_VERSION := 3`，OTA 断言设备 `moonstone,sunstone,stone`。这次探针把 boot header v3 在两套 slot 的镜像上核实了。defconfig 名字没有从运行中的内核里读出来，编内核时以这份 BoardConfig 为入口，再和本机 `/proc/config.gz` 对差异。
+The public device tree `crdroidandroid/android_device_xiaomi_stone`, branch `16.0`, says `TARGET_KERNEL_CONFIG := moonstone_defconfig`, `TARGET_KERNEL_SOURCE := kernel/xiaomi/sm6375`, `BOARD_BOOT_HEADER_VERSION := 3`, and the OTA assertion devices are `moonstone,sunstone,stone`. This probe confirmed boot header v3 on the images of both slots. The defconfig name was not read out of the running kernel. When building, start from this BoardConfig and then diff against this machine's `/proc/config.gz`.
 
-## 和 clue.md 不一致的地方
+## Where this disagrees with clue.md
 
-`clue.md` 的大方向（Qualcomm、公开源码、先 Droidian、再 Ubuntu Touch）可以保留。下面几条以本机为准。
+The broad direction in `clue.md` (Qualcomm, public source, Droidian first, Ubuntu Touch second) can stay. The following points follow this machine.
 
-1. 正在运行的是 `stone` 统一树的 crDroid 12.9（2026-04-16），不是文档里说的较新 `gemstone` 分支。移植基线跟这套构建走。
-2. `ro.vendor.build.version.sdk` 是 36，不是一份原厂 Android 12 vendor。但显示相关 HAL 没有跟着变成 AIDL HWC3，见下一节。
-3. `getprop` 里的 `verifiedbootstate=green`、`flash.locked=1`、`vbmeta.device_state=locked` 是系统属性伪装。内核命令行是 `androidboot.verifiedbootstate=orange`。vbmeta 头的 flags 等于 3，也就是 verity 和 verification 都关了。Bootloader 处于解锁后的自定义 ROM 状态。
-4. `clue.md` 把 Mesa Freedreno 当成后续图形路线。运行内核里 `CONFIG_DRM_MSM` 没有打开。`/dev/dri/card0` 和 `renderD128` 都属于 `5e00000.qcom,mdss_mdp` 的下游 `msm_drm`（compatible `qcom,sde-kms`），是显示控制器，不是 Freedreno 的 GPU 节点。GPU 只走 KGSL。
-5. 15–25 小时进 Phosh 只在 boot 封装和 UBWC 都顺利时才靠谱。分区布局使“先试后回滚”比那份估算假设的更贵。
+1. What is running is crDroid 12.9 (2026-04-16) from the unified `stone` tree, not the newer `gemstone` branch the document mentions. The port baseline follows this build.
+2. `ro.vendor.build.version.sdk` is 36, not a stock Android 12 vendor. The display HALs did not follow that into AIDL HWC3. See the next section.
+3. `verifiedbootstate=green`, `flash.locked=1`, and `vbmeta.device_state=locked` in `getprop` are spoofed system properties. The kernel command line says `androidboot.verifiedbootstate=orange`. The vbmeta header flags equal 3, meaning both verity and verification are off. The bootloader is in the unlocked custom-ROM state.
+4. `clue.md` treats Mesa Freedreno as a later graphics path. `CONFIG_DRM_MSM` is not enabled in the running kernel. `/dev/dri/card0` and `renderD128` both belong to the downstream `msm_drm` of `5e00000.qcom,mdss_mdp` (compatible `qcom,sde-kms`). That is the display controller, not a Freedreno GPU node. The GPU goes through KGSL only.
+5. "Phosh in 15–25 hours" is plausible only if boot packaging and UBWC both go smoothly. The partition layout makes "try, then roll back" more expensive than that estimate assumed.
 
-## 启动镜像和分区
+## Boot images and partitions
 
-两套物理 slot 的 boot 都是 Android boot header v3，页大小 4096。镜像本身读过头部，没有整包拉下来。
+Both physical slots use Android boot header v3, page size 4096. The headers were read. The full images were not pulled.
 
-| 镜像 | header | 内核 | ramdisk | 镜像内 OS 字段 |
+| Image | Header | Kernel | Ramdisk | OS field inside the image |
 | --- | --- | --- | --- | --- |
-| `boot_b`（当前） | v3，header 1580 字节 | 48,105,472 字节 | 1,576,326 字节 | Android 16.0.0，补丁级别 2026-04 |
-| `boot_a` | v3 | 48,103,424 字节 | 1,573,252 字节 | Android 16.0.0，补丁级别 2026-03 |
-| `vendor_boot_b` | v3，页 4096 | — | vendor ramdisk 23,809,557 字节 | 命令行以 `androidboot.hardware=qcom` 开头 |
-| `vendor_boot_a` | v3，页 4096 | — | vendor ramdisk 23,788,247 字节 | 同上，体积略小 |
+| `boot_b` (current) | v3, header 1580 bytes | 48,105,472 bytes | 1,576,326 bytes | Android 16.0.0, patch level 2026-04 |
+| `boot_a` | v3 | 48,103,424 bytes | 1,573,252 bytes | Android 16.0.0, patch level 2026-03 |
+| `vendor_boot_b` | v3, page 4096 | — | vendor ramdisk 23,809,557 bytes | Command line starts with `androidboot.hardware=qcom` |
+| `vendor_boot_a` | v3, page 4096 | — | vendor ramdisk 23,788,247 bytes | Same, slightly smaller |
 
-分区大小（512 字节扇区）：
+Partition sizes (512-byte sectors):
 
-| 分区 | 大小 |
+| Partition | Size |
 | --- | --- |
-| `boot_a` / `boot_b` | 各 128 MiB |
-| `vendor_boot_a` / `vendor_boot_b` | 各 96 MiB |
-| `dtbo_a` / `dtbo_b` | 各 24 MiB |
-| `vbmeta_a` / `vbmeta_b` | 各 64 KiB |
-| `super` | 9,126,805,504 字节，和设备树里的 `BOARD_SUPER_PARTITION_SIZE` 一致 |
-| `userdata` | 217,087,640 扇区，约 103.5 GiB |
+| `boot_a` / `boot_b` | 128 MiB each |
+| `vendor_boot_a` / `vendor_boot_b` | 96 MiB each |
+| `dtbo_a` / `dtbo_b` | 24 MiB each |
+| `vbmeta_a` / `vbmeta_b` | 64 KiB each |
+| `super` | 9,126,805,504 bytes, matching `BOARD_SUPER_PARTITION_SIZE` in the device tree |
+| `userdata` | 217,087,640 sectors, about 103.5 GiB |
 | `modem_b` | 180 MiB |
 | `dsp_b` | 32 MiB |
 | `bluetooth_b` | 1 MiB |
 
-`dtbo_b` 是标准 DTBO 魔数，表里只有 2 个条目，整包大约 1018 字节。当前 `dtbo_idx=1`，`dtb_idx=0`。基线 DTB 在 boot 镜像里，DTBO 只是很小的 overlay。基线 DTB 里同时放了多块面板（m17、m17 k6s、nt36672e、visionox 等），这是 stone/moonstone 共用树的结果。运行时以命令行里的 `msm_drm.dsi_display0` 为准，不要按第一块面板去适配。
+`dtbo_b` has the standard DTBO magic. The table has only 2 entries, and the whole image is about 1018 bytes. The current `dtbo_idx=1` and `dtb_idx=0`. The baseline DTB lives in the boot image. DTBO is only a small overlay. The baseline DTB contains several panels (m17, m17 k6s, nt36672e, Visionox, and others), which is what the shared stone/moonstone tree does. At runtime, follow `msm_drm.dsi_display0` on the command line. Do not adapt to the first panel in the table.
 
-`vbmeta_b` 魔数 `AVB0`，算法类型 2（SHA256_RSA2048），flags 为 3：hashtree 关闭，verification 关闭。
+`vbmeta_b` magic is `AVB0`, algorithm type 2 (SHA256_RSA2048), flags 3: hashtree off, verification off.
 
-`lpdump` 看到的动态分区只有：
+The dynamic partitions `lpdump` saw are only:
 
-- `odm_b`、`product_b`、`system_b`、`system_ext_b`、`vendor_b`
-- 以及对应的 `*-cow`
+- `odm_b`, `product_b`, `system_b`, `system_ext_b`, `vendor_b`
+- and the matching `*-cow` partitions
 
-没有 `system_a` / `vendor_a`。COW 从 `super` 后部一直排到最后一个扇区。`super` 没有空闲区间，也没有第二套系统。逻辑分区属性是 `readonly,updated`，说明 virtual A/B 的更新已经落在 slot B 上，另一侧的空间正被快照占用。
+There is no `system_a` / `vendor_a`. The COW partitions run from the back of `super` through the last sector. `super` has no free range and no second system. Logical partition attributes are `readonly,updated`, so the virtual A/B update has landed on slot B and the other side is occupied by snapshots.
 
-已挂载的文件系统：`system`、`system_ext`、`product`、`vendor`、`odm` 都是 ext4。fstab 同时接受 ext4 和 erofs。`vendor` 742 MB 里只剩约 9 MB，`system` 大约 93% 满。不要往现有 vendor 里塞文件。
+Mounted filesystems: `system`, `system_ext`, `product`, `vendor`, and `odm` are all ext4. fstab accepts both ext4 and erofs. About 9 MB of 742 MB remains on `vendor`, and `system` is about 93% full. Do not stuff files into the existing vendor.
 
-userdata 是 f2fs，`fileencryption=aes-256-xts`，还有 metadata encryption 和 inlinecrypt。fstab 里有 microSD（`4784000.sdhci`）和 USB OTG 的 vold 项。探针时没有 `mmcblk`，卡槽是空的。
+userdata is f2fs, `fileencryption=aes-256-xts`, plus metadata encryption and inlinecrypt. fstab has vold entries for microSD (`4784000.sdhci`) and USB OTG. There was no `mmcblk` during the probe. The slot was empty.
 
-内核是单体的。`/proc/config.gz` 里没有任何 `=m`，`lsmod` 为空，`/vendor/lib/modules` 不存在。Wi-Fi、触摸、KGSL、蓝牙都编进内核。`vendor_boot` 里那 23 MB 是 Android 第一阶段 ramdisk，不是外置模块包。
+The kernel is monolithic. `/proc/config.gz` has no `=m`, `lsmod` is empty, and `/vendor/lib/modules` does not exist. Wi-Fi, touch, KGSL, and Bluetooth are built in. The 23 MB in `vendor_boot` is the Android first-stage ramdisk, not an out-of-tree module package.
 
-## 内核配置里和 Halium 有关的缺口
+## Halium gaps in the kernel config
 
-运行配置可读，共 6680 行。已经打开、对移植有用的部分：
+The running config is readable, 6680 lines. Already enabled, and useful for a port:
 
-- `CONFIG_ANDROID`、binderfs、binder/hwbinder/vndbinder、ashmem、ION system heap
-- `CONFIG_NAMESPACES`、`CONFIG_UTS_NS`、`CONFIG_NET_NS`
-- `CONFIG_CGROUPS`、`CONFIG_BLK_DEV_INITRD`、`CONFIG_EFI_STUB`
-- `CONFIG_USB_CONFIGFS` 和 FunctionFS
-- `CONFIG_QCOM_KGSL`、`CONFIG_DRM`、`CONFIG_DRM_MIPI_DSI`，显示走下游 msm_drm
-- `CONFIG_CLD_LL_CORE`（Wi-Fi 内建）、`CONFIG_BT_QCA`、`CONFIG_BT_HCIUART_QCA`
-- `CONFIG_TOUCHSCREEN_FT3519T`、`CONFIG_TOUCHSCREEN_SYNAPTICS_DSX`
+- `CONFIG_ANDROID`, binderfs, binder/hwbinder/vndbinder, ashmem, ION system heap
+- `CONFIG_NAMESPACES`, `CONFIG_UTS_NS`, `CONFIG_NET_NS`
+- `CONFIG_CGROUPS`, `CONFIG_BLK_DEV_INITRD`, `CONFIG_EFI_STUB`
+- `CONFIG_USB_CONFIGFS` and FunctionFS
+- `CONFIG_QCOM_KGSL`, `CONFIG_DRM`, `CONFIG_DRM_MIPI_DSI`; display goes through downstream msm_drm
+- `CONFIG_CLD_LL_CORE` (Wi-Fi built in), `CONFIG_BT_QCA`, `CONFIG_BT_HCIUART_QCA`
+- `CONFIG_TOUCHSCREEN_FT3519T`, `CONFIG_TOUCHSCREEN_SYNAPTICS_DSX`
 - `CONFIG_BUILD_ARM64_DT_OVERLAY`
 
-Halium / LXC / systemd 还缺、需要在内核里打开的：
+Still missing for Halium / LXC / systemd, and needing to be turned on in the kernel:
 
-- `CONFIG_PID_NS` 关闭。没有它，容器起不来。
-- `CONFIG_USER_NS` 关闭。
-- `CONFIG_VT` 关闭。
-- `CONFIG_DEVTMPFS` 关闭。
-- `CONFIG_FHANDLE` 关闭。Debian systemd 会要它。
-- 这份配置里没有 `CONFIG_IPC_NS` 这一行。是高通树拿掉了该选项，还是默认并进了 `CONFIG_NAMESPACES`，要到源码里确认。挂载命名空间同样没有单独开关。
+- `CONFIG_PID_NS` is off. Without it, a container cannot start.
+- `CONFIG_USER_NS` is off.
+- `CONFIG_VT` is off.
+- `CONFIG_DEVTMPFS` is off.
+- `CONFIG_FHANDLE` is off. Debian systemd wants it.
+- This config has no `CONFIG_IPC_NS` line. Whether the Qualcomm tree removed the option, or it is folded into `CONFIG_NAMESPACES` by default, has to be checked in the source. Mount namespaces likewise have no separate switch.
 
-这些都是 Halium 移植的常规内核补丁，不是这台机器特有的死结。补丁应该做成相对 crDroid `android_kernel_xiaomi_stone` 的小差异，而不是把整棵内核拷进本仓库。
+These are ordinary Halium kernel changes, not a dead end unique to this machine. The changes should be a small delta against crDroid `android_kernel_xiaomi_stone`, not a copy of the whole kernel in this repository.
 
-编这份内核的编译器是 clang 21。Droidian 移植文档里列出的 Android clang 停在给 Android 13 用的 clang 14。第一轮编译应沿用 crDroid 能编过 `5.4.302` 的工具链，不要先换成文档里的旧 clang。
+The compiler that built this kernel is clang 21. The Android clang listed in the Droidian porting docs stops at clang 14, for Android 13. The first build should keep the toolchain that already built crDroid's `5.4.302`. Do not switch to the older clang from the docs first.
 
-## 硬件和 HAL
+## Hardware and HALs
 
-### 图形
+### Graphics
 
-SurfaceFlinger 报的 GLES 是：
+The GLES string reported by SurfaceFlinger is:
 
 `Qualcomm, Adreno (TM) 619, OpenGL ES 3.2 V@0530.0 (GIT@c263890aed, Ifb496a9c37, 1656315076) (Date:06/27/22)`
 
-`ro.opengles.version` 为 196610，即 GLES 3.2。Vulkan 属性是 `adreno`。KGSL 的 `gpu_model` 是 `Adreno619v2`。
+`ro.opengles.version` is 196610, which is GLES 3.2. The Vulkan property is `adreno`. KGSL `gpu_model` is `Adreno619v2`.
 
-`/vendor/etc/vintf/manifest/vendor.qti.hardware.display.composer-service.xml`：
+`/vendor/etc/vintf/manifest/vendor.qti.hardware.display.composer-service.xml`:
 
 - `vendor.qti.hardware.display.composer` HIDL 3.0
 - `android.hardware.graphics.composer` HIDL 2.4
 - `vendor.display.config` HIDL 2.0
 - `vendor.display.color` HIDL 1.5
 
-Mapper 是 HIDL passthrough，同时注册了 mapper 3.0 和 4.0，以及 QTI mapper 3.0/4.0。注释写明来源是 `hardware/qcom-caf/sm8350/display`。
+The mapper is HIDL passthrough. It registers mapper 3.0 and 4.0, plus QTI mapper 3.0/4.0. The comment says the source is `hardware/qcom-caf/sm8350/display`.
 
-HWC 当前图层格式是 `RGBA_8888_UBWC`。libhybris 加载 HWC 2.4 之后，黑屏的常见原因就是 UBWC，不是“没有 GPU 节点”。
+The current HWC layer format is `RGBA_8888_UBWC`. After libhybris loads HWC 2.4, the usual cause of a black screen is UBWC, not "there is no GPU node."
 
-这条组合（KGSL + HIDL HWC 2.4 + 2022 年 Adreno 用户态）是 Halium 已经做过很多次的类型。它不支持把现有内核直接拿去跑 KWin/Freedreno。
+This combination (KGSL + HIDL HWC 2.4 + 2022 Adreno userspace) is a type Halium has done many times. It does not support taking the existing kernel and running KWin/Freedreno on it.
 
-### 触摸、按键、指纹
+### Touch, keys, fingerprint
 
-| 输入设备 | 位置 | 说明 |
+| Input device | Location | Notes |
 | --- | --- | --- |
-| `fts_ts` | i2c-2，地址 0x38 | 触摸屏。dmesg 里 Device ID `0x54`，FocalTech |
-| `qpnp_pon` | PM6125 power-on | 电源键 |
-| `gpio-keys` | 平台设备 | 侧键 |
-| `holi-qrdsku1-snd-card Headset/Button Jack` | ALSA，q6core APR | 耳机座 |
-| `uinput-fpc` | 虚拟输入 | 指纹用户态。内核日志里是 `fpc1020` |
-| `uinput-goodix` | 虚拟输入 | 树里还有 Goodix，本机活跃驱动是 FPC |
+| `fts_ts` | i2c-2, address 0x38 | Touchscreen. dmesg Device ID `0x54`, FocalTech |
+| `qpnp_pon` | PM6125 power-on | Power key |
+| `gpio-keys` | platform device | Side keys |
+| `holi-qrdsku1-snd-card Headset/Button Jack` | ALSA, q6core APR | Headset jack |
+| `uinput-fpc` | virtual input | Fingerprint userspace. The kernel log says `fpc1020` |
+| `uinput-goodix` | virtual input | The tree also has Goodix. The active driver on this machine is FPC |
 
-触摸驱动编进内核，而且已经接到 DRM blank 通知。Phosh 的触摸有机会在不改驱动的情况下工作。指纹留到很后面。
+The touch driver is built into the kernel and is already wired to DRM blank notifications. Phosh touch has a chance of working without a driver change. Fingerprint waits until much later.
 
-### 无线
+### Wireless
 
-`wlan0` 和 `wlan1` 存在，驱动是平台设备 `c800000.qcom,icnss` 上的 `icnss2`。固件在 `modem` 分区的 `/vendor/firmware_mnt/image`，日期 2023-10-18，含 `bdwlan.102` 到 `bdwlan.10e` 这一组板级数据，以及 ADSP/modem split 镜像。蓝牙固件在独立的 `bluetooth` 分区，有 `apbtfw11.tlv` 和一组 `crbtfw*.tlv`。
+`wlan0` and `wlan1` exist. The driver is `icnss2` on the platform device `c800000.qcom,icnss`. Firmware is in the `modem` partition at `/vendor/firmware_mnt/image`, dated 2023-10-18, including the board-data set `bdwlan.102` through `bdwlan.10e` and the ADSP/modem split images. Bluetooth firmware is in its own `bluetooth` partition, with `apbtfw11.tlv` and a set of `crbtfw*.tlv`.
 
-Wi-Fi HAL 本身已经是 AIDL `android.hardware.wifi` version 3。Droidian 不必走这个 HAL：内核接口已经在了，第一选择是让 wpa_supplicant 直接用 `wlan0`，固件继续从 modem 分区读。
+The Wi-Fi HAL itself is already AIDL `android.hardware.wifi` version 3. Droidian does not have to go through that HAL. The kernel interface is already there. The first choice is wpa_supplicant on `wlan0` directly, with firmware still read from the modem partition.
 
-### 音频、传感器、其他
+### Audio, sensors, other
 
-声卡名是 `holi-qrdsku1-snd-card`，挂在 `qcom,msm-audio-apr` / q6core 下面，`/dev/snd` 里是一整套高通压缩和 PCM 设备。这是 Android Audio HAL 的路，不是一块普通 ALSA 声卡。音频会比显示慢。
+The sound card is `holi-qrdsku1-snd-card`, under `qcom,msm-audio-apr` / q6core. `/dev/snd` is a full set of Qualcomm compressed and PCM devices. This is the Android Audio HAL path, not an ordinary ALSA card. Audio will be slower than display.
 
-传感器：TDK icm4x6xx（加速度、陀螺）、QST qmc630x（磁力）、ams tmd2755（光感和距离），其余姿态和计步来自 Qualcomm SSC。另有小米 AOD 和 pickup 传感器。
+Sensors: TDK icm4x6xx (accelerometer, gyroscope), QST qmc630x (magnetometer), ams tmd2755 (light and proximity). The remaining orientation and step counting come from Qualcomm SSC. There are also Xiaomi AOD and pickup sensors.
 
-manifest 里还有 Lineage 的红外 HAL、NFC 默认服务、小米指纹 biometric HAL。fstab 说明有 microSD 卡槽。这些都只登记到“硬件在”，没有逐项验证功能。
+The manifest also has Lineage's infrared HAL, the default NFC service, and Xiaomi's fingerprint biometric HAL. fstab says there is a microSD slot. All of these are recorded only as "the hardware is present." Function was not checked item by item.
 
-Health HAL 是 AIDL version 4。充电和电量在内核 power supply 里大概率还能读到，不依赖这个 HAL 才能看到百分比。
+The health HAL is AIDL version 4. Charging and battery level can most likely still be read from the kernel power supply. Seeing a percentage does not depend on this HAL.
 
-## 可行性
+## Feasibility
 
-Halium 上游仓库在 2026 年 5 月仍有 `halium-11.0` 到 `halium-14.0` 分支。UBports 移植介绍里的公开对照表写到 Halium 13（LineageOS 20）。Droidian 文档写明：Android 9 及以后的机器可以做，已有 Halium 9 以上内核的 Ubuntu Touch 移植通常能跑 Droidian。
+Halium upstream still had `halium-11.0` through `halium-14.0` branches in May 2026. The public comparison table in the UBports porting introduction goes up to Halium 13 (LineageOS 20). The Droidian docs say devices from Android 9 onward can be done, and an Ubuntu Touch port that already has a Halium 9 or newer kernel can usually run Droidian.
 
-本机没有现成的 Droidian 或 Ubuntu Touch 移植。这是新端口，不是安装现成镜像。
+This machine has no existing Droidian or Ubuntu Touch port. This is a new port, not an install of a finished image.
 
-| 阶段 | 判断 | 依据 |
+| Stage | Judgment | Basis |
 | --- | --- | --- |
-| 导出 boot / vendor_boot / dtbo / vbmeta，并保住 crDroid 安装包 | 可以做 | root 已能读这些分区；两套 slot 的 boot 都还在 |
-| 打上命名空间等开关后编出能启动的 Halium 内核 | 较有把握 | 5.4、header v3、单体内核、公开源码都齐；工具链必须能编过这份 qgki 树 |
-| 进 Droidian shell / SSH | 较有把握 | 常规 Halium 目标。风险在 boot 与 vendor_boot 必须成对，以及切槽后没有 system_a |
-| Phosh、触摸、GPU 加速 | 有机会，但是第一道技术坎 | HWC 2.4 + KGSL + 2022 年驱动是有利条件；UBWC 和 mapper 4.0 仍可能黑屏 |
-| Wi-Fi | 有机会，排在显示之后 | `wlan0` 和 icnss2 固件都在；监管域和固件路径要单独处理 |
-| 音频、充电显示、基础休眠 | 音频明显更难 | q6core / APR，不是简单声卡 |
-| 电话、相机、指纹、NFC、红外 | 第一阶段不做 | 高通 modem、FPC、SSC 都依赖 Android HAL，周期以周计 |
-| 主线内核或 Freedreno | 不做 | `CONFIG_DRM_MSM` 未开，GPU 节点是 KGSL |
+| Export boot / vendor_boot / dtbo / vbmeta, and keep the crDroid install package | Doable | Root can already read these partitions; both slots' boot images are still there |
+| Build a bootable Halium kernel after enabling namespaces and the other switches | Fairly confident | 5.4, header v3, a monolithic kernel, and public source are all present; the toolchain must be able to build this qgki tree |
+| Reach a Droidian shell / SSH | Fairly confident | An ordinary Halium target. The risk is that boot and vendor_boot must be a pair, and there is no system_a after a slot switch |
+| Phosh, touch, GPU acceleration | Possible, but the first technical hurdle | HWC 2.4 + KGSL + the 2022 driver are favorable; UBWC and mapper 4.0 can still black-screen |
+| Wi-Fi | Possible, after display | `wlan0` and the icnss2 firmware are both present; the regulatory domain and firmware path need separate handling |
+| Audio, charge display, basic suspend | Audio is clearly harder | q6core / APR, not a simple sound card |
+| Phone, camera, fingerprint, NFC, infrared | Not in the first stage | Qualcomm modem, FPC, and SSC all depend on Android HALs. The unit of work is weeks |
+| Mainline kernel or Freedreno | Do not do | `CONFIG_DRM_MSM` is off. The GPU node is KGSL |
 
-`clue.md` 里“15–25 小时进 Phosh”只覆盖顺利的那条路：Halium 认这份 vendor、不必新写 HWC、UBWC 一次通过。内核补丁和 boot 打包如果顺，SSH 是几天内的工作。Phosh 要是被 UBWC 或 mapper 挡住，就是数周。能当日常手机用的 Ubuntu Touch 不在这个预算里。
+"Phosh in 15–25 hours" in `clue.md` covers only the smooth path: Halium accepts this vendor, no new HWC has to be written, and UBWC passes on the first try. If the kernel changes and boot packaging go well, SSH is a few days of work. If Phosh is blocked by UBWC or the mapper, it is weeks. An Ubuntu Touch that can be a daily phone is not in that budget.
 
-Droidian 和 Ubuntu Touch 共用内核、vendor blob 和 Halium boot。Ubuntu Touch 还要单独做 Lomiri、设备配置和 OTA 布局，所以它是第二阶段，不是换一个 rootfs 就结束。
+Droidian and Ubuntu Touch share the kernel, vendor blobs, and Halium boot. Ubuntu Touch also needs Lomiri, a device configuration, and an OTA layout, so it is a second stage. It is not finished by swapping a rootfs.
 
-## 仓库
+## Repositories
 
-现在只使用这一个仓库。
+Use only this repository for now.
 
-`stone-ut` 放文档、Halium 内核配置片段、刷写和备份脚本、Droidian 适配、以后的 Ubuntu Touch 设备配置。两个系统的用户空间分目录放，不拆成两个项目。专有 blob 和整份 boot 镜像不要提交。
+`stone-ut` holds the documents, the Halium kernel config fragment, flash and backup scripts, the Droidian adaptation, and later the Ubuntu Touch device configuration. Userspace for the two systems lives in separate directories. Do not split them into two projects. Do not commit proprietary blobs or whole boot images.
 
-第二个仓库在第一次改内核时再建立：fork `crdroidandroid/android_kernel_xiaomi_stone`，分支专门给 Halium 5.4。内核是 GPL、体积大、上游跟 crDroid 走，放进本仓库会让克隆和评审都失真。本仓库只记录它的远程地址、分支和配置差异。
+Create the second repository when the kernel is first modified: a fork of `crdroidandroid/android_kernel_xiaomi_stone`, on a branch dedicated to Halium 5.4. The kernel is GPL, large, and tracks crDroid upstream. Putting it in this repository would distort clones and review. This repository only records its remote, branch, and config delta.
 
-第三个仓库先不建。那会是 `android_device_xiaomi_stone` 的 fork，只有在现有 vendor 的 HIDL 图形栈驱动不了 libhybris、必须重编一套更旧的 vendor 时才需要。第一阶段直接用这台机器上的 vendor 分区和 modem 固件。crDroid 的 `proprietary_vendor_xiaomi-stone` 只作对照，不复制进 git。
+Do not create the third repository yet. That would be a fork of `android_device_xiaomi_stone`, needed only if this vendor's HIDL graphics stack cannot drive libhybris and an older vendor has to be rebuilt. The first stage uses this machine's vendor partition and modem firmware directly. crDroid's `proprietary_vendor_xiaomi-stone` is only a reference. Do not copy it into git.
 
-## 路线图
+## Roadmap
 
-1. 备份，仍不刷机。用 root 导出 slot A 和 slot B 的 `boot`、`vendor_boot`、`dtbo`、`vbmeta`。另外留好这份 crDroid 12.9 的安装包。个人数据单独备份。确认知道如何用 fastboot 把 slot B 的 boot 镜像写回去并切回 `_b`。
-2. 把运行中的 `/proc/config.gz` 存进本仓库，做成相对 `moonstone_defconfig` 的差异说明。打开 PID/USER namespace、VT、DEVTMPFS、FHANDLE，核对 IPC 和 mount namespace。用能编过 crDroid 5.4 的 clang 编内核。
-3. 打出 header v3 的 boot 和配对的 vendor_boot。DTB 仍进 boot，DTBO 保持现在的索引 1，除非内核设备树把面板选盘逻辑改了。
-4. 实验性启动只替换 boot 类分区，不动 `super` 和 userdata。slot A 的旧 boot 可以覆盖，但要先导出；它不是一套能启动的旧系统。一旦新内核能进 Halium init，再决定 rootfs 放哪。
-5. rootfs 用 Droidian。`super` 没有空间并行安装。userdata 是加密 f2fs，Halium 占用它就会清掉 Android 数据。这一步之前备份必须已经验证能刷回。插一张 microSD 只作为以后的根文件系统候选，这次探针时卡槽是空的。
-6. 用 libhybris 接 HWC 2.4 和 KGSL，确认 `fts_ts`，再开 Phosh。Wi-Fi 走 `wlan0`。充电状态走内核接口。
-7. 同一套 boot 换 Ubuntu Touch rootfs，补 Lomiri 和设备配置。
-8. 音频、电话、相机、指纹、休眠单独立项。哪一项要改 vendor 或重编设备树，再决定开不开第三个仓库。
+1. Back up, still without flashing. With root, export `boot`, `vendor_boot`, `dtbo`, and `vbmeta` for slots A and B. Also keep this crDroid 12.9 install package. Back up personal data separately. Confirm that you know how to fastboot the slot B boot image back and switch back to `_b`.
+2. Store the running `/proc/config.gz` in this repository and write it up as a delta against `moonstone_defconfig`. Enable PID/USER namespaces, VT, DEVTMPFS, and FHANDLE, and check IPC and mount namespaces. Build the kernel with a clang that can already build crDroid 5.4.
+3. Produce a header v3 boot and a paired vendor_boot. The DTB still goes in boot. Keep the current DTBO index 1, unless the kernel device tree changes the panel-selection logic.
+4. An experimental boot replaces only boot-class partitions. Do not touch `super` or userdata. Slot A's old boot can be overwritten, but export it first. It is not a bootable old system. Once the new kernel can reach Halium init, decide where the rootfs goes.
+5. The rootfs is Droidian. `super` has no room for a side-by-side install. userdata is encrypted f2fs. If Halium takes it, Android data is wiped. Before this step the backup must already have been shown to flash back. A microSD card is only a later candidate for the root filesystem. The slot was empty during this probe.
+6. Connect HWC 2.4 and KGSL through libhybris, confirm `fts_ts`, then start Phosh. Wi-Fi uses `wlan0`. Charge state uses the kernel interface.
+7. Swap in an Ubuntu Touch rootfs on the same boot, and add Lomiri and the device configuration.
+8. Audio, phone, camera, fingerprint, and suspend are separate items. If one of them requires changing vendor or rebuilding the device tree, decide then whether to open the third repository.
 
-## 风险
+## Risks
 
-1. 切到 slot A 不会得到一套完好的 crDroid。`super` 里没有 slot A 的逻辑分区。误切槽的表现是启动失败，修复方法是写回 slot B 的 boot 并切回 `_b`，前提是那些镜像已经导出。
-2. 安装 Linux rootfs 的那一步会破坏现有系统或用户数据。`super` 已满，不能做成双系统。COW 还占着后半个 `super`，直接改动态分区前要先理解 snapshot，不能只按普通 A/B 去删分区。
-3. vendor 几乎写满，系统分区也很满。适配文件要放在 rootfs 里，不要 remount vendor 再拷进去。
-4. UBWC 帧缓冲可能让 HWC 已经加载、屏幕仍然全黑。这是显示阶段的主要技术风险。
-5. 内核由 clang 21 编出。换一套较旧的 Halium clang 可能编不过，或编过但和现有 vendor 模块接口不一致。本机又没有外置模块，接口不一致首先会表现在显示和 Wi-Fi 固件加载上。
-6. 共用设备树覆盖 sunstone 和 moonstone。defconfig 名叫 moonstone，面板表里有多块屏。编出来的 DTB 必须仍选中 m17 38 0c 0a 这块屏，并且 `dtbo_idx` 仍是 1。
-7. 命令行和 vbmeta 说明验证已关，但属性被伪装成 locked/green。后续 fastboot 脚本要读命令行和 vbmeta flags，不要读 `getprop ro.boot.flash.locked`。不要重新上锁。
-8. 音频、modem、指纹、相机任何一项都可能单独变成几周工作。它们失败不影响“Phosh 能亮”这个第一目标，但会决定这台机器能不能当电话用。
-9. 没有官方移植。做完之后维护跟着 crDroid 的 5.4 内核走；stone 树如果停更，安全修复要自己接。
+1. Switching to slot A does not produce a working crDroid. `super` has no slot A logical partitions. A mistaken slot switch looks like a failed boot. The fix is to write slot B's boot back and switch back to `_b`, provided those images were exported.
+2. Installing a Linux rootfs destroys the current system or user data. `super` is full, so this cannot be a dual boot. COW still occupies the back half of `super`. Before changing dynamic partitions, understand the snapshot. Do not delete partitions as if this were ordinary A/B.
+3. Vendor is almost full, and the system partitions are full too. Adaptation files belong in the rootfs. Do not remount vendor and copy them in.
+4. A UBWC framebuffer can leave HWC loaded while the screen stays black. This is the main technical risk of the display stage.
+5. The kernel was built with clang 21. An older Halium clang may fail to build, or build and then disagree with the existing vendor module interface. This machine also has no out-of-tree modules. An interface mismatch shows up first in display and Wi-Fi firmware loading.
+6. The shared device tree covers sunstone and moonstone. The defconfig is named moonstone, and the panel table has several screens. The DTB that gets built must still select the m17 38 0c 0a panel, and `dtbo_idx` must still be 1.
+7. The command line and vbmeta say verification is off, but properties are spoofed as locked/green. Later fastboot scripts must read the command line and vbmeta flags, not `getprop ro.boot.flash.locked`. Do not relock.
+8. Any one of audio, modem, fingerprint, and camera can become weeks of work on its own. Their failure does not affect the first goal, "Phosh can light up," but it decides whether this machine can be used as a phone.
+9. There is no official port. After it is done, maintenance follows crDroid's 5.4 kernel. If the stone tree stops, security fixes have to be carried locally.
 
-## 这次没有做的事
+## What this probe did not do
 
-- 没有刷写、没有切换槽位、没有导出完整镜像文件。
-- 没有读 userdata 里的个人文件。dmesg 环形缓冲区已经卷过，开机早期的面板和 Wi-Fi 探测日志不在了。
-- 没有拆开 vendor_boot ramdisk 看里面的 init 和 fstab 副本。头部尺寸已经说明它是一套大约 23 MB 的 v3 vendor ramdisk。
-- 没有在源码里确认 `CONFIG_IPC_NS` 消失的原因。
-- 没有验证红外、NFC、相机颗数和卡槽在插入存储卡之后的实际行为。
+- No flashing, no slot switch, and no export of complete image files.
+- Personal files in userdata were not read. The dmesg ring buffer had already wrapped, so early-boot panel and Wi-Fi probe logs were gone.
+- The vendor_boot ramdisk was not unpacked to inspect its init and fstab copy. The header size already says it is a v3 vendor ramdisk of about 23 MB.
+- The reason `CONFIG_IPC_NS` disappeared was not confirmed in the source.
+- Infrared, NFC, camera count, and the card slot's behavior after a card is inserted were not verified.
