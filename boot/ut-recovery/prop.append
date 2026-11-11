@@ -1,0 +1,12 @@
+# Added to the UBports recovery's prop.default, as halium-generic-adaptation-build-tools'
+# make-bootimage.sh does for unified recoveries.
+ro.recovery.usb.vid=18D1
+ro.recovery.usb.adb.pid=D001
+ro.recovery.usb.fastboot.pid=4EE0
+service.adb.root=1
+ro.build.ab_update=true
+# Do not mount userdata at /data with /cache inside it (setup-fake-cache):
+# here userdata is the Ubuntu root filesystem, its /cache is a symlink that does
+# not resolve in recovery, and nothing in recovery needs it mounted. Read-only
+# properties from prop.default win over init.rc's later "setprop ... true".
+ro.ubuntu.recovery.fakecache=false

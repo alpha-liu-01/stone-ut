@@ -53,6 +53,37 @@ fail() {
 
 log "init start"
 
+# Recovery (docs/roadmap-release.md item 1). stone has no recovery partition:
+# like crDroid ("recovery as boot"), the bootloader boots this image for
+# recovery too, and passes androidboot.force_normal_boot=1 only for a normal
+# boot. For a recovery boot, unpack UBports' unified recovery ramdisk
+# (/ramdisk-recovery.img, merged with boot/ut-recovery at build time) into a
+# tmpfs and hand over to its Android init. A charger boot
+# (androidboot.mode=charger) is not a recovery boot.
+NORMAL_BOOT=
+BOOT_MODE=
+for x in $(cat /proc/cmdline); do
+    case "$x" in
+    androidboot.force_normal_boot=1) NORMAL_BOOT=y ;;
+    androidboot.mode=*) BOOT_MODE=${x#*=} ;;
+    esac
+done
+if [ -z "$NORMAL_BOOT" ] && [ "$BOOT_MODE" != charger ] && [ -f /ramdisk-recovery.img ]; then
+    log "recovery boot (no androidboot.force_normal_boot=1)"
+    mkdir -p /recovery
+    mount -t tmpfs -o mode=0755 tmpfs /recovery || fail "could not mount the recovery tmpfs"
+    (cd /recovery && gzip -dc /ramdisk-recovery.img | cpio -i -d -m) || fail "could not unpack the recovery ramdisk"
+    [ -e /recovery/system/bin/init ] || fail "recovery ramdisk has no /system/bin/init"
+    # The vendor ramdisk's /lib/modules are GKI modules that do not match this
+    # kernel; leave them behind, so first-stage init skips module loading
+    # instead of failing on them. Android's init mounts /proc, /sys and /dev.
+    umount /dev/pts
+    umount /dev
+    umount /sys
+    umount /proc
+    exec switch_root /recovery /init
+fi
+
 part_dev() {
     name="$1"
     for ue in /sys/class/block/*/uevent; do

@@ -1,0 +1,17 @@
+Device files merged into UBports' unified recovery ramdisk (Halium 14,
+generic_arm64) by boot/ut-init/build-boot-image.sh. See docs/roadmap-release.md,
+item 1.
+
+  init.recovery.qcom.rc     crDroid 14's own (USB controller, backlight), from
+                            its boot ramdisk (recovery as boot)
+  system/etc/recovery.fstab crDroid 14's, without /data (see the comment there)
+  prop.append               USB ids and adb properties appended to prop.default;
+                            fakecache off (userdata is not mounted in recovery)
+  res/images                UBports' res-xxhdpi recovery UI images
+                            (ubports/halium_bootable_recovery halium-14.0,
+                            9cdb4a9; the default ramdisk has mdpi, too small
+                            on this ~395 PPI screen; crDroid's stone recovery
+                            uses the same xxhdpi menu font). font.png is
+                            fonts/18x32.png there; its licence: res/OFL-fonts.txt
+
+The recovery ramdisk itself is fetched by tools/fetch-recovery-ramdisk.sh.

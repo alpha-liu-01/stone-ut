@@ -33,12 +33,33 @@ case "$MODE" in
     *) echo "usage: $0 [boot|trace|logs|disk]" >&2; exit 1 ;;
 esac
 
-for app in sh mount umount switch_root sleep mkdir grep sed cat cp echo ls head ln dmesg chroot chmod sync rm; do
+for app in sh mount umount switch_root sleep mkdir grep sed cat cp echo ls head ln dmesg chroot chmod sync rm gzip cpio; do
     ln -s busybox "$STAGE/root/bin/$app"
 done
 cp "$INIT_SRC" "$STAGE/root/init"
 chmod 755 "$STAGE/root/init"
 cp "$ROOT/boot/ut-init/stone-dynparts.py" "$STAGE/root/stone-dynparts.py"
+# Recovery (docs/roadmap-release.md item 1): UBports' unified recovery ramdisk
+# with boot/ut-recovery merged in, stored as /ramdisk-recovery.img. init
+# switches to it when the bootloader leaves out androidboot.force_normal_boot=1.
+REC_IN=${RECOVERY_RAMDISK:-"$ROOT/out/recovery/ramdisk-recovery.img"}
+REC_SHA256=c9c32a413b9e23a9b4ec1e0daba4e009ec485404590b74ef93059db22efaca40
+if [ "$MODE" = boot ]; then
+    [ -f "$REC_IN" ] || { echo "error: $REC_IN missing; run tools/fetch-recovery-ramdisk.sh" >&2; exit 1; }
+    [ "$(sha256sum < "$REC_IN" | cut -d' ' -f1)" = "$REC_SHA256" ] || {
+        echo "error: $REC_IN is not the pinned recovery build" >&2; exit 1; }
+    # Every entry in it is root-owned and there are no device nodes, so it
+    # is unpacked as the build user and repacked with -R 0:0.
+    mkdir -p "$STAGE/recovery"
+    (cd "$STAGE/recovery" && gzip -dc "$REC_IN" | cpio -i -d -m --quiet)
+    cp -R "$ROOT/boot/ut-recovery/system/." "$STAGE/recovery/system/"
+    cp "$ROOT/boot/ut-recovery/res/images/"* "$STAGE/recovery/res/images/"
+    cp "$ROOT/boot/ut-recovery/init.recovery.qcom.rc" "$STAGE/recovery/init.recovery.qcom.rc"
+    grep -v '^#' "$ROOT/boot/ut-recovery/prop.append" >> "$STAGE/recovery/prop.default"
+    (cd "$STAGE/recovery" && find . -print0 | sort -z | cpio --null -o -H newc -R 0:0 --quiet) \
+        | gzip -9n > "$STAGE/root/ramdisk-recovery.img"
+    rm -rf "$STAGE/recovery"
+fi
 cp "$ROOT/boot/ut-init/stone-vendor-fixups.py" "$STAGE/root/stone-vendor-fixups.py"
 cp -R "$ROOT/boot/ut-init/rootfs-overlay" "$STAGE/root/stone-rootfs"
 # Built against this kernel. The vendor copy's vermagic does not match.
