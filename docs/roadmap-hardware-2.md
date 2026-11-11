@@ -19,7 +19,7 @@ The phone has no passwordless sudo. Anything that needs root has to be run by th
 
 State at the start (2026-11-10):
 - `boot_b`: `e1554638…` (kernel `#13`).
-- Current `boot_b` (updated 2026-11-11): `a706816c…` (kernel `#14`; USB MTP, item 2, and the media log levels, item 3), written and confirmed on 2026-11-11. Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
+- Current `boot_b` (updated 2026-11-11): `065ee6e5…` (kernel `#14`; USB MTP, the media log levels, the microSD mount options and the GNSS service), written and confirmed on 2026-11-11. Earlier: `a706816c…` (log levels). Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
 - Ubuntu Touch 24.04-2.x, Halium 14, crDroid 14 vendor.
 - The deferred system update work is at the end of `docs/roadmap-hardware.md`.
 
@@ -32,7 +32,7 @@ See `docs/roadmap-hardware.md`, "Already confirmed working". In short:
 - Bluetooth audio and calls, wired headsets (3.5 mm and USB);
 - rear and front camera photos and video.
 
-Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2), hardware video decoding in the Media Player (item 3, it already worked), microSD card (item 4).
+Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2), hardware video decoding in the Media Player (item 3, it already worked), microSD card (item 4), location (item 7).
 
 ## Fix order
 
@@ -42,7 +42,7 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
 4. MicroSD card. Added and done 2026-11-11. Detection, mount, MTP, the media scanner, speed and integrity were already fine. Fixed: a fixed 100 ms per written file on FAT cards (udisks' vfat `flush`), now 6.6 ms per file including sync.
 5. Camera leftovers. Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
 6. Power. Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
-7. Location (GNSS). Not checked yet.
+7. Location (GNSS). Pure Maps found no position (2026-11-11). The engine was fine but always cold-started: Qualcomm's `xtra-daemon` was not enabled, and the HAL was never told about the network, so there was no time or XTRA data. Fixed with `stone-gnss-netstate.service` (an indoor fix in about 30 s, 4 m accuracy). Done 2026-11-11: confirmed in Pure Maps. SUPL is left out (unimplemented upstream).
 8. Fingerprint reader. Not checked yet.
 9. Smaller items:
    - the second SIM slot (only slot 1 has been tested; slot 2 is empty);
@@ -413,7 +413,103 @@ What is seen: not checked yet.
 
 Goal: a position fix in a maps app, through the Android GNSS HAL.
 
-What is seen: not checked yet.
+What is seen (user, 2026-11-11): Pure Maps (OpenStore, `pure-maps.jonnius` 3.5.0) could not find the position.
+
+### Checked so far (2026-11-11, indoors)
+
+- The stack:
+  - `lomiri-location-service` 3.4.1, started through lxc-android-config's `lomiri-location-serviced-wrapper` with `--provider gps::Provider --provider remote::Provider`;
+  - the GPS provider (`providers::gps::android::HardwareAbstractionLayer`) calls Halium's `libubuntu_platform_hardware_api` (`u_hardware_gps_*`), which reaches the vendor's HIDL `android.hardware.gnss@2.1-service-qti` (`gnss_service`, running) through `libubuntu_application_api.so` and the `gnss@1.0`–`@2.1` interfaces in the Halium system image;
+  - `loc_launcher` is running.
+- Service state over D-Bus (`busctl get-property com.lomiri.location.Service`): `State=enabled`, `DoesSatelliteBasedPositioning=true`, `IsOnline=true`, `DoesReportCellAndWifiIds=false`.
+- Permission: `~/.local/share/LomiriLocationService/trust.db` has `pure-maps.jonnius_pure-maps`, answer 1 (granted).
+- The HAL delivers satellite status: `VisibleSpaceVehicles` had 26 GPS entries after Pure Maps' attempt. Two had signal (PRN 11 at 29 dB-Hz, PRN 21 at 27), one had ephemeris, none was used in a fix. The chain from the Qualcomm engine to lomiri-location-service works, and the RF front end receives satellites. Indoors, with a cold start, no fix is expected.
+- Assistance data:
+  - UT's `/etc/gps.conf` (from `liblomiri-location-service3`) points XTRA at `http://xtra{1,2,3}.gpsonextra.net/xtra2.bin`. All three still serve data (200, 27 to 62 KB), and so does `path1.xtracloud.net`. The phone resolves them. The service downloads XTRA only when the HAL asks.
+  - The vendor's `izat.conf` enables `xtra-daemon` and `slim_daemon`, but neither is running under `loc_launcher` and neither has a tombstone. `lowi-server` and the `xtwifi-*` agents are disabled. Without XTRA, a cold first fix outdoors can take minutes.
+  - The vendor `gps.conf` has `SUPL_MODE=3`, `NTP_SERVER=time.xtracloud.net`, `XTRA_SYSTEM_TIME_INJECT=1`.
+- Not related: `vndservicemanager` aborts on `selinux_status_open` (`selinux=0`). Its 19 tombstones are all from early boots; this boot it runs with a stable pid.
+- Logging gaps:
+  - lomiri-location-service uses glog without file output, so nothing it logs reaches the journal or `/tmp`. `GLOG_logtostderr=1` fixes that: the provider's start-up line (`android_hardware_abstraction_layer.cpp:276 … on_set_capabilities`) then appears in the journal.
+  - Android logcat needs root (`lxc-attach`).
+  - `lomiri-location-serviced-cli --test` refuses to run without root. **Do not use it with the service running**: its fixture (`runtime_tests.cpp`) runs `service lomiri-location-service stop` and only starts the service again when the test ends. The test does `delete_all_aiding_data()`, a standalone cold start, and waits up to 15 minutes for a fix, three times.
+
+### First outdoor test (2026-11-11, invalid)
+
+- The first `stone-gnss-debug.sh start` ran `cli --test` in the background. The test stopped lomiri-location-service at 09:28:02, 4 s after the debug restart, and nothing started it again until `stop` at 09:36:55. During the user's walk there was no service, so Pure Maps could not get a position. The logcat capture was empty because the script's `pkill -f` pattern matched its own `sh -c`. Both are fixed in the script.
+- What the walk did show: the CLI test drove the HAL directly in standalone mode. Its output has 6 satellite reports, all empty, all at 09:28 (the file was last written then). For the remaining 8 minutes outdoors, the engine reported nothing to it.
+- Indoors afterwards, as phablet, with `tools/phone-debug/gnss-monitor.qml` (a QtPositioning session through the `lomiri` plugin, like Pure Maps; `sourceError` 3 = `NoError`) for 2 minutes, plus `gdbus monitor` on the service:
+  - the service went `active` with `ClientApplications=['unconfined']`;
+  - in 2 minutes it published only 2 `VisibleSpaceVehicles` changes, each with one satellite (keys 163 and 80, about 29 dB-Hz, no ephemeris), and no position;
+  - a running Qualcomm engine reports its whole satellite list every second. Either the engine barely runs, or the HAL → platform API → service path delivers only some reports. That is the next thing to find.
+
+### Next: outdoor test with logging
+
+`tools/phone-debug/stone-gnss-debug.sh` (sudo):
+- `start` adds a runtime drop-in for lomiri-location-service (`GLOG_logtostderr=1 GLOG_v=1`) and restarts it, captures Android logcat in the container, runs `lomiri-location-serviced-cli --test` in the background (positions as they arrive, up to 30 min), and saves a snapshot of the processes, properties and satellites.
+- `stop` saves everything to `~/gnss-debug/` and removes the drop-in. The drop-in lives in `/run` and is gone after a reboot anyway.
+
+`run [SECONDS]` does `start`, holds `gnss-monitor.qml` as phablet for SECONDS (180), then `stop`. It can be run indoors, because the question now is what the HAL reports per second, not whether there is a fix.
+
+### Indoor captures with logging (2026-11-11)
+
+`stone-gnss-debug.sh run 180` twice, as root and indoors. The logcat capture was changed to `logcat -d` at stop: a background `logcat -f` started through `lxc-attach` does not survive it returning. Logs are in `out/halium14/logs/gnss-2/` and `gnss-3/` (gitignored).
+
+- **The engine is healthy.** With `GLOG_v=200` the service logs every NMEA sentence: 181 `$GPRMC` in 180 s, and 180 `on_sv_status_update` calls (up to 12 satellites). Halium's bridge (`ubuntu_application_gps_for_hybris`) reports "AIDL IGnss service not declared, skipping AIDL backend", then "HIDL GNSS backend initialized successfully", and passes `gnssNmeaCb`, `gnssSvStatusCb`, `gnssStatusCb` and `gnssSetCapabilitesCb`.
+- The sparse `VisibleSpaceVehicles` changes seen before come from the service. Its satellite handler is GPS-only and legacy (PRN 1 to 32 used as bit positions; every satellite typed `gps`; GLONASS 65 to 96 and BeiDou keys mislabelled), and the property only notifies on change. Cosmetic.
+- **But it starts cold every time.** It tracked GPS 25 and 28 and GLONASS 69, 79 and 80 at 22 to 33 dB-Hz, all with elevation 00 and azimuth 000 (no almanac, ephemeris or XTRA). The NMEA showed `$GPRMC,,V`, `$GPGGA` quality 0 and `$GPGSA,A,1`: no fix. Nobody asked UT for time or XTRA either: `on_request_utc_time` and `on_xtra_download_request` were never called.
+- SUPL: `LocSvc_Agps: NULL AGNSS NIF ! / No AGPS State Machine for agpsType: 1 apnTypeMask: 0x10`. The HAL wanted a SUPL data connection, but nothing registered the AGNSS callbacks Android's framework would register. Not fixed; see below.
+
+### GNSS: what fixed it
+
+1. **`xtra-daemon` was not running.** It is Qualcomm's assistance agent: it fetches NTP time (`time.xtracloud.net`) and XTRA orbit data (`https://path{1,2,3}.xtracloud.net/xtra3grej.bin`) and injects both into the modem's GNSS engine.
+   - The vendor `init.qcom.rc` has `on property:persist.sys.xtra-daemon.enabled=*` → `restart loc_launcher`, and `loc_launcher` only starts it when that property is set. On Android, Qualcomm's framework apps set it; here it was unset.
+   - `setprop persist.sys.xtra-daemon.enabled true` (phablet may set it): `loc_launcher` restarted, `xtra-daemon` (uid 1021) started at once, and `/data/vendor/location/xtra/` and `nvparam.sqlite` appeared.
+2. **The HAL believed there was no network.** The next capture had `xtra-daemon: onRequestXtraData … isCon:0 isNonMetered:0 isGpsEnabled:1` and then `XTRA download result status:4 starting timer for 300 sec`.
+   - On Android, the framework (`GnssNetworkConnectivityHandler`) reports every connectivity change to the HAL through `IAGnssRil::updateNetworkState`. Nothing on UT did that.
+   - python3-gbinder as phablet, on `/dev/hwbinder`: `android.hardware.gnss@1.0::IGnss/default` → `getExtensionAGnssRil()` (transaction 9) → `IAGnssRil::updateNetworkState(true, WIFI, false)` (transaction 4) returned `true`. `updateNetworkAvailability` (transaction 5) returned `false` (not implemented in QTI's HAL; harmless).
+   - Within 5 s, `xtra-daemon` connected to `18.164.96.40:443` (`path1.xtracloud.net`). DNS inside the container works; only the network state was missing.
+3. **Result:** a 60 s QtPositioning session (`gnss-monitor.qml`) indoors:
+   - first valid position at about 30 s, accuracy 4 m;
+   - 115 updates in the minute;
+   - `VisibleSpaceVehicles` had 16 satellites, 9 with signal, 14 with predicted azimuth/elevation, 4 with ephemeris and 4 used in the fix.
+
+   (The coordinates are not recorded here.)
+
+Made permanent: `stone-gnss-netstate.service` (`User=radio`, `Restart=always`), which runs `usr/lib/stone/gnss-netstate.py`:
+- sets `persist.sys.xtra-daemon.enabled=true` if it is not `true` (fresh installs; on this phone the persist property already survives reboots);
+- calls `updateNetworkState(connected, WIFI|MOBILE, roaming=false)` and `updateNetworkAvailability`. It does that at start, on every NetworkManager `StateChanged`/`PropertiesChanged` (connected when `State` ≥ 60; WIFI for `802-11-wireless` and Ethernet, otherwise MOBILE), whenever hwservicemanager reports `IGnss/default` registered (HAL restarts, and once at start), and every 10 minutes.
+- It only uses the `IAGnssRil` extension and does not touch the IGnss callbacks that lomiri-location-service owns.
+
+python-gbinder details: the readers return `(ok, value)`. `ServiceManager.add_registration_handler(name, func)` stores `func` as an instance attribute, which only works on a Python subclass of the Cython class.
+
+Live install: `tools/phone-debug/stone-gnss-install.sh` (sudo). Image: `boot-ut.img` SHA256 `065ee6e561d036d5ba4c48c227b189b74d8dbba73102370f6f122fe81c0d5b81` (kernel `#14`, unchanged; adds the service). The previous image is kept as `out/halium14/boot-ut-ec969650.img`.
+
+### Still open (location)
+
+- SUPL / A-GNSS over the mobile network (`NULL AGNSS NIF`): **not implemented, by decision (2026-11-11).**
+  - Halium's bridge (`libubuntu_application_api.so`) supports HIDL AGNSS: `IAGnssCallback`, `dataConnOpen`/`dataConnClosed`/`dataConnFailed`, `setServer`, IPv4 status ("AgnssStatusIpV6 not implemented").
+  - lomiri-location-service 3.4.1 stops there. `on_agps_status_update()` only stores and logs the status, and nothing in the service ever calls `SuplAssistant::set_server` or `notify_data_connection_*`. SUPL is unimplemented upstream, on every device.
+  - Adding it would mean a new component: a SUPL server (AOSP's default is `supl.google.com:7275`) and answering the HAL's data-connection requests. SUPL also sends the SIM identity and the serving cell to that server.
+  - With XTRA and NTP time now working, the gain is small: a first fix in seconds instead of under a minute, and assistance without Wi-Fi or mobile data. XTRA files cover several days, so assistance also lasts through short offline periods.
+- The service's satellite list is GPS-only and mislabels other constellations (upstream lomiri-location-service).
+- In the third capture my unconfined test client got "Client lacks permissions to access the service with the given criteria" when started with `runuser` from the root script. The same client started from an adb shell was allowed. Only this test tool is affected; the apps (Pure Maps, uNav) have their trust entries (granted).
+- Network-based location (Wi-Fi/cell, no GPS): `DoesReportCellAndWifiIds=false`, and no remote provider is installed. 24.04 ships none since the HERE provider and Mozilla Location Service went away. Out of scope.
+
+### Result (2026-11-11)
+
+Confirmed by the user: Pure Maps finds the position. The user flashed `065ee6e5…` and rebooted. Checked over adb:
+- `stone-gnss-netstate` is active, the installed `gnss-netstate.py` is byte-identical to the overlay's, and `xtra-daemon` has run since boot;
+- the user's network switches were followed: at 254 s `gsm/70 → updateNetworkState(connected=True, type=MOBILE) = True`, at 362 s back to `802-11-wireless/70 → … WIFI = True`.
+
+The location item is done. What remains is optional or upstream (SUPL, satellite labelling).
+
+### Events
+
+- 2026-11-11: the user reported Pure Maps cannot find the position. Checked the stack, the service state, the permission, the satellite status (the HAL works: 26 satellites, 2 with signal indoors, no fix), the XTRA servers (alive) and the Qualcomm daemons (`xtra-daemon` enabled but not running). Wrote and pushed `stone-gnss-debug.sh`.
+- 2026-11-11: outdoor walk, no position, but the test was invalid: `cli --test` had stopped the service (see "First outdoor test"). The script was fixed (no `--test`, logcat pattern, new `run` mode), and `gnss-monitor.qml` was added. Indoors: only two one-satellite reports in 2 minutes. Waiting for the user to run `stone-gnss-debug.sh run` indoors.
+- 2026-11-11: indoor captures 2 and 3 (see above). Engine healthy, but a cold start with no time or XTRA. Set `persist.sys.xtra-daemon.enabled=true` (xtra-daemon started). Found `isCon:0`, and called `IAGnssRil::updateNetworkState` by hand: XTRA downloaded, and a first fix came indoors in about 30 s with 4 m accuracy. Wrote `stone-gnss-netstate.service`, tested it as phablet (start push, HAL registration push, keeps running), and built `065ee6e5…`.
+- 2026-11-11: the user flashed `065ee6e5…`: Pure Maps finds the position. The service was active from boot and followed Wi-Fi → mobile → Wi-Fi. SUPL was looked at and left out (unimplemented upstream; privacy cost, small gain). Logs of the three captures are in `out/halium14/logs/gnss-{1,2,3}/`. The debug output and install copies were removed from `/home/phablet`; `stone-gnss-debug.sh` and `gnss-monitor.qml` are still there.
 
 ## 8. Fingerprint reader
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Network state and XTRA daemon switch for Qualcomm's GNSS stack
+# See /usr/lib/stone/gnss-netstate.py. Without it the GNSS engine never gets
+# time or XTRA orbit data and a first fix takes minutes outdoors, or never.
+After=lxc-android-config.service NetworkManager.service dbus.service
+Wants=lxc-android-config.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/gnss-netstate.py
+User=radio
+Group=radio
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
