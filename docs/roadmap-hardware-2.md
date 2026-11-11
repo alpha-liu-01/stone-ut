@@ -19,7 +19,7 @@ The phone has no passwordless sudo. Anything that needs root has to be run by th
 
 State at the start (2026-11-10):
 - `boot_b`: `e1554638…` (kernel `#13`).
-- `boot_b`: `7d432e5d…` (kernel `#14`, USB MTP, item 2), written and confirmed on 2026-11-10. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
+- Current `boot_b` (updated 2026-11-11): `a706816c…` (kernel `#14`; USB MTP, item 2, and the media log levels, item 3), written and confirmed on 2026-11-11. Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
 - Ubuntu Touch 24.04-2.x, Halium 14, crDroid 14 vendor.
 - The deferred system update work is at the end of `docs/roadmap-hardware.md`.
 
@@ -32,18 +32,19 @@ See `docs/roadmap-hardware.md`, "Already confirmed working". In short:
 - Bluetooth audio and calls, wired headsets (3.5 mm and USB);
 - rear and front camera photos and video.
 
-Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2), hardware video decoding in the Media Player (item 3, it already worked).
+Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2), hardware video decoding in the Media Player (item 3, it already worked), microSD card (item 4).
 
 ## Fix order
 
 1. Rotation and sensors. Nothing turns the screen, and no app gets an accelerometer, light, proximity or compass reading. Proximity during calls (screen off at the ear), automatic brightness, and photo orientation in the camera all depend on it.
 2. USB file transfer (MTP). Done 2026-11-10 (kernel patch 0007). Before the fix, turning on MTP in Settings turned developer mode off, adb disappears, USB falls back to charging only, and the PC never shows the phone. Added on 2026-11-10, ahead of the decoders.
-3. Hardware video and audio decoding. Checked 2026-11-10: already working. H.264, VP9 and HEVC (also the camera's own recordings) play in the Media Player on Qualcomm's Codec2 hardware decoders, with zero-copy output to `hybrissink`. Video in Morph (QtWebEngine) is software-decoded, with no hardware path on this stack (2026-11-11). Open: media-hub's own CPU use.
-4. Camera leftovers. Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
-5. Power. Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
-6. Location (GNSS). Not checked yet.
-7. Fingerprint reader. Not checked yet.
-8. Smaller items:
+3. Hardware video and audio decoding. Checked 2026-11-10: already working. H.264, VP9 and HEVC (also the camera's own recordings) play in the Media Player on Qualcomm's Codec2 hardware decoders, with zero-copy output to `hybrissink`. Video in Morph (QtWebEngine) is software-decoded, with no hardware path on this stack (2026-11-11). media-hub's own CPU use: per-frame debug logging from Halium's media compat layer was turned off (about 8 % of a core saved at 30 fps); the rest is inherent.
+4. MicroSD card. Added and done 2026-11-11. Detection, mount, MTP, the media scanner, speed and integrity were already fine. Fixed: a fixed 100 ms per written file on FAT cards (udisks' vfat `flush`), now 6.6 ms per file including sync.
+5. Camera leftovers. Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
+6. Power. Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
+7. Location (GNSS). Not checked yet.
+8. Fingerprint reader. Not checked yet.
+9. Smaller items:
    - the second SIM slot (only slot 1 has been tested; slot 2 is empty);
    - call volume keys (they change the media volume, not `Voice Rx Gain`);
    - wideband Bluetooth calls (mSBC);
@@ -269,43 +270,158 @@ Morph browser (2026-11-11): YouTube "Never Gonna Give You Up", 1080p VP9, loopin
 
 ### Still open (media)
 
-- media-hub itself uses about 45 to 50 % of one core during playback. That is not the video decode (`faad` and pulsesink are small). Where it goes has not been measured per thread. It could be worth a look for battery life.
+- media-hub's own CPU use (about 45 to 50 % of one core during playback): investigated on 2026-11-11, see "media-hub CPU during playback" below. One real waste was found and fixed (per-frame debug logging); the rest is how this path works.
 - Video in Morph is software-decoded (see above). Not fixable within the port.
 - Not tested:
   - hardware audio decoding. AAC is decoded in software (`faad`), which is normal and cheap.
 - `mediaextractor` still aborts at every boot. Playback goes through GStreamer's `qtdemux`, so nothing has been seen to depend on it.
+
+### media-hub CPU during playback
+
+Profile (`tools/phone-debug/media-hub-profile.sh`, as phablet; no perf or gdb on the phone). It waits for `media.hwcodec` to start decoding, then records per-thread CPU over 20 s, `strace -c -f` for 10 s, and `strace -tt` of the busiest thread. The user played the 720p H.264 file in Media Player.
+
+- media-hub: 515 ms/s, spread over about 15 threads:
+  - `ALooper` 91 (MediaCodec's message loop);
+  - `vqueue:src` 70;
+  - two `multiqueue4:src` threads, 70 and 46;
+  - `HwBinder` 48;
+  - `threaded-ml` 46 (PulseAudio mainloop);
+  - `amcvideodec-c2q…` 44;
+  - `aqueue:src` 34;
+  - `qtdemux0:sink` 15;
+  - `CodecLooper` 12.
+- The player app took 263 ms/s (`QSGRenderThread` 192), `media.hwcodec` 168, and all CPUs about 2.2 cores.
+- No single thread runs away. The `ALooper` trace is `futex`/`clock_gettime`/binder `ioctl` (Android's own looper).
+- The syscall profile stood out: in 10 s, 10,581 `writev`, 10,583 `getuid`, 10,582 `gettid` and 9,639 `getpid`. That is Android liblog writing about 1,000 lines/s.
+
+What the log lines are (`strace -e writev` of the same decode in `gst-decode-test.py`):
+- Halium's `libmedia_compat_layer` (the MediaCodec bridge that `amcviddec` uses) logs every call at DEBUG/VERBOSE under the tags `MediaCodecLayer` and `MediaFormatLayer`: about 23 lines per decoded frame (`media_codec_dequeue_output_buffer…`, `Dequeued output buffer:`, `size: 1382400`, `info->flags: 0`, …). In 12 s there were 2043 D and 1057 V lines from `MediaCodecLayer`.
+- Each line is written twice: to the logd socket, and with the `lg` header to pmsg.
+- liblog drops lines below `log.tag.<TAG>`, and nothing set it (`log.tag` and `persist.log.tag` are empty, `ro.debuggable=1`). phablet can set these properties with `/usr/bin/setprop`.
+- With `log.tag.MediaCodecLayer=I` and `log.tag.MediaFormatLayer=I`: 147 log writes in 12 s (one-off Codec2 start-up messages) instead of 3259.
+
+A/B, real-time decode (`sync=true`, 30 fps, 20 s, two rounds each):
+
+| Codec logging | Decoding process user + sys | `logd` | All CPUs |
+| --- | --- | --- | --- |
+| DEBUG/VERBOSE (as shipped) | 8.3 s, 8.0 s | 690 ms, 680 ms | 1060, 1067 ms/s |
+| `I` | 7.4 s, 7.2 s | 130 ms, 110 ms | 987, 966 ms/s |
+
+That saves about 85 ms of CPU per second of 720p30 playback (about 8 % of a core), mostly kernel time in the decoding process plus logd. It scales with the frame rate (twice as much at 60 fps).
+
+Fix: `stone-android-log-levels.service` (oneshot, `After=lxc-android-config.service`), which runs `usr/lib/stone/android-log-levels.sh`. The script waits up to 120 s for Android's property service, then sets `log.tag.MediaCodecLayer=I` and `log.tag.MediaFormatLayer=I`. INFO, WARN and ERROR lines of those tags are kept. Only these two tags are changed. A global `log.tag=I` would save more, but it would also hide every DEBUG line in the container (camera and radio debugging used them).
+
+The rest of media-hub's cost (`fakesink` decodes in `gst-decode-test.py` cost about the same, so it is not media-hub itself):
+- GStreamer's queues and demuxer;
+- MediaCodec's looper;
+- per-buffer binder IPC to the Codec2 service;
+- PulseAudio.
+
+Reducing that would mean changing the hybris GStreamer plugin or Android's MediaCodec. Not pursued.
+
+Image: `boot-ut.img` SHA256 `a706816cfcdcbc2f6b2277ac805d0e991e626731a3cb11617264fc14153a7ca0` (kernel `#14`, unchanged; adds the service). `7d432e5d…` is kept as `out/halium14/boot-ut-7d432e5d.img`. Written and confirmed after a reboot on 2026-11-11.
 
 ### Events
 
 - 2026-11-10: the user put the two test files on the phone. The registry listed the `c2.qti` decoders. Direct decodes worked for both files on the hardware decoders, and `media.hwcodec` did the work. The user played both files in Media Player (smooth, in sync, correct picture), and the GStreamer log showed `amcviddec-c2qti{avc,vp9}decoder` into `hybrissink` with no software video decoder. No fix was needed. The debug drop-in, the sampler and the temporary links were removed afterwards. `gst-decode-test.py` and `media-cpu-sample.sh` are in `tools/phone-debug/`, with copies in `/home/phablet`.
 - 2026-11-10: second round. A 1080p60 HEVC file and a new 1080p camera recording decode in hardware, both directly and in Media Player (`amcviddec-c2qtihevcdecoder` and `amcviddec-c2qtiavcdecoder` into `hybrissink`). The user confirmed smooth playback. The gst-amc error at the recording's end is the EOS buffer and is harmless. The debug drop-in and the sampler were removed again.
 - 2026-11-11: Morph and YouTube 1080p VP9 (looping): software, libvpx in the renderer (about 1.8 cores), with `media.hwcodec` idle. QtWebEngine has no hardware decode path here (Chromium on Linux would need VA-API).
+- 2026-11-11: profiled media-hub during 720p playback (user played the file). Found about 1,000 Android log lines/s from `MediaCodecLayer` (DEBUG/VERBOSE, per frame). `log.tag.MediaCodecLayer=I` and `log.tag.MediaFormatLayer=I` save about 85 ms/s (A/B measured). Added `stone-android-log-levels.service` and built `a706816c…`. Not yet written.
+- 2026-11-11: the user wrote `a706816c…` and rebooted. Kernel `#14`. `stone-android-log-levels.service` was `active (exited)`, status 0, at 12.7 s (lxc-android-config at 12.1 s). `log.tag.MediaCodecLayer=I` and `log.tag.MediaFormatLayer=I`. The installed files are byte-identical to the overlay. A traced 12 s decode right after the boot: 290 log writes (both copies), 8 of them `MediaCodecLayer` INFO lines, instead of about 6500 before. Fix confirmed.
 
-## 4. Camera leftovers
+## 4. MicroSD card
+
+Goal: a card in the slot is mounted for phablet, works over MTP and in the apps (media scanner), reads and writes at the card's speed, and keeps its data intact.
+
+What is seen (user, 2026-11-11): the user put a card in and formatted it with the built-in tools. It was detected and was reachable over MTP.
+
+### Checked (2026-11-11, image `a706816c…`)
+
+| Part | Result |
+| --- | --- |
+| Card | `SD64G`, SD, manfid `0x9f`, oemid `0x5449`, made 09/2022, 62.5 GB (122167296 sectors). SSR: Class 10, UHS U1, V10 |
+| Controller | `4784000.sdhci` (`mmc1`), block device `/dev/mmcblk1` (`brw-rw---- root disk`), scheduler bfq |
+| Filesystem | FAT32, label empty, UUID `A0F3-F9B7`, on the whole device (no partition table) |
+| Mount | udisks2 2.10.1, `/media/phablet/A0F3-F9B7`, `vfat rw,nosuid,nodev,relatime,uid=32011,gid=32011,fmask=0022,dmask=0022,shortname=mixed,showexec,utf8,flush,errors=remount-ro`. 59 GB free |
+| MTP | Works (user) |
+| Media scanner | `mediascanner-service-2.0` indexes the card: a video copied to `…/Videos/` was in `~/.cache/mediascanner-2.0/mediastore.db` within 8 s, so Music, Gallery and Videos see card media |
+| Sequential write | 18.8 MB/s (512 MiB random data, `dd oflag=direct conv=fsync`, bs 4M). U1 is rated for at least 10 MB/s |
+| Sequential read | 45.7 MB/s (`iflag=direct`). That is above the about 23 MB/s ceiling of 4-bit High Speed, so the card runs in a UHS-I mode. The SSR's first byte (bus width 0) was a false alarm |
+| Data integrity | SHA256 of the 512 MiB read back with direct I/O matches the source |
+| Small files | **Slow: 101.6 ms per file** (200 × 64 KB in one process: 20.30 s in write+close, 0.02 s in sync). Internal ext4 takes 0.9 ms per file |
+| Filesystems | Kernel has `vfat` and `exfat` (`CONFIG_EXFAT_FS=y`), plus `fuse`. No NTFS. `dosfstools` is installed, `exfatprogs` is not |
+
+### Small files: what is wrong, and the fix
+
+- The 100 ms is the vfat `flush` mount option. On every `close()` of a file opened for writing, `fat_file_release()` writes the file out and then sleeps `HZ/10`. The time all goes into close, not sync, and it is a fixed 100 ms, independent of the 64 KB size.
+- Copying a folder of 1000 photos or songs to the card (MTP or a file manager) would spend at least 100 s just sleeping. Upstream Linux still has this sleep.
+- `flush` comes from udisks 2.10's built-in `vfat_defaults=uid=$UID,gid=$GID,shortname=mixed,utf8=1,showexec,flush`. There was no `/etc/udisks2/mount_options.conf`. udisks' exFAT defaults have no `flush`.
+- Android's vold mounts FAT cards without `flush`.
+- Fix: `boot/ut-init/rootfs-overlay/etc/udisks2/mount_options.conf`, `[defaults] vfat_defaults=uid=$UID,gid=$GID,shortname=mixed,utf8=1,showexec`. That is udisks' default without `flush`. It applies at the next mount (reboot, or take the card out and back in).
+- Trade-off: without `flush`, written data goes out with normal writeback (about 30 s) instead of at close, so pulling the card straight after copying can lose the most recent writes. The rule is to unmount (eject) first, as on Android.
+- It also applies to FAT USB sticks on OTG.
+- Live install: `tools/phone-debug/stone-sdcard-install.sh` (sudo), which installs the file from `/home/phablet/mount_options.conf`.
+
+Result after the live install and re-inserting the card: the mount options are `…,shortname=mixed,showexec,utf8,errors=remount-ro`, without `flush`.
+
+| Test | Before (`flush`) | After |
+| --- | --- | --- |
+| 200 × 64 KB, one process | write+close 20.30 s, sync 0.02 s: 101.6 ms/file | write+close 0.04 s, sync 1.29 s: **6.6 ms/file**, contents verified |
+| Same on internal ext4 (reference) | 0.9 ms/file | 0.8 ms/file |
+| 512 MiB `dd oflag=direct` write | 18.8 MB/s | 15.9 MB/s (direct I/O does not use `flush`; the card's own variation) |
+| 512 MiB `dd iflag=direct` read | 45.7 MB/s | 45.7 MB/s |
+| 512 MiB `cp` + `sync` (how a file manager copies) | — | 35.9 s (15 MB/s) |
+| SHA256 of the 512 MiB on the card | matches | matches |
+
+The real cost of a small file is now the card's own write time, flushed at `sync` (6.4 ms/file), instead of a sleep.
+
+Image: `boot-ut.img` SHA256 `ec969650b803d156409dad34bd97e3a97508fc0fe32bdcad59af45e97136459e` (kernel `#14`, unchanged; adds `etc/udisks2/mount_options.conf`). The previous image is kept as `out/halium14/boot-ut-a706816c.img`. The live-installed `/etc/udisks2/mount_options.conf` is byte-identical to the overlay's, so writing the image changes nothing on this phone.
+
+### Other findings (no change)
+
+- The built-in formatter made FAT32, probably because `exfatprogs` (`mkfs.exfat`) is not installed. FAT32 cannot hold files of 4 GiB or more: long camera videos or large downloads to the card will fail at 4 GiB.
+- Cards over 32 GB come formatted as exFAT from the factory. The kernel's exFAT driver and udisks' `exfat_defaults` mean such cards should mount, but this has not been tested with a real exFAT card. Without `exfatprogs`, the phone cannot check or repair exFAT, and its formatter cannot make it.
+- The card has no partition table (a "superfloppy"). Linux, Android and Windows 10+ read that. Some cameras and older systems want an MBR partition.
+
+### Status (2026-11-11)
+
+| Part | State |
+| --- | --- |
+| Detection, mount, MTP, media scanner | Working |
+| Sequential speed, integrity | Working (18.8 MB/s write, 45.7 MB/s read, checksum matches) |
+| Small files | Fixed: 101.6 → 6.6 ms per file (live install, confirmed after re-inserting the card) |
+| exFAT cards | Kernel support present; not tested with a real card |
+
+### Events
+
+- 2026-11-11: the user reported the card works (detected, MTP). Checked the device, the mount, the media scanner, speed and integrity (all fine) and small files (100 ms each, from vfat `flush`). Wrote `etc/udisks2/mount_options.conf` and `stone-sdcard-install.sh`, and pushed `mount_options.conf` and the script to `/home/phablet`. The test files on the card (`sdtest.bin`, `Videos/sdtest-video.mp4`) were removed; `/home/phablet/sdtest.src` (512 MiB random data) is kept for the re-test.
+- 2026-11-11: the user ran `stone-sdcard-install.sh`. The script finished, but `adb shell -t` with sudo did not return; it was safe to kill. The user took the card out and put it back in: mounted without `flush`. Small files went from 101.6 to 6.6 ms/file, and the sequential tests and checksums are as before. Built `ec969650…`. Removed `mount_options.conf`, `stone-sdcard-install.sh` and `sdtest.src` from `/home/phablet`.
+
+## 5. Camera leftovers
 
 Goal: flash and torch, tap-to-focus, zoom and the barcode reader work.
 
 What is seen: not tested (`docs/roadmap-hardware.md` item 7). The flash shares TLMM pin 38 with the camera sensors (kernel patch 0005). Photo orientation depends on item 1.
 
-## 5. Power
+## 6. Power
 
 Goal: the phone suspends when the screen is off, standby drain is reasonable, and Settings shows the battery level and health.
 
 What is seen: not checked yet.
 
-## 6. Location (GNSS)
+## 7. Location (GNSS)
 
 Goal: a position fix in a maps app, through the Android GNSS HAL.
 
 What is seen: not checked yet.
 
-## 7. Fingerprint reader
+## 8. Fingerprint reader
 
 Goal: enrolling a fingerprint and unlocking with it in Lomiri, if the vendor's fingerprint HAL can be reached.
 
 What is seen: not checked yet.
 
-## 8. Smaller items
+## 9. Smaller items
 
 - The second SIM slot.
 - Call volume keys controlling the call volume (`Voice Rx Gain`) instead of the media volume (`docs/roadmap-hardware.md` item 6).

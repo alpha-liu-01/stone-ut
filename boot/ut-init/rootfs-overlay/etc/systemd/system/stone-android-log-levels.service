@@ -1,0 +1,13 @@
+[Unit]
+Description=Quiet Halium's per-frame media compat layer logging
+# See /usr/lib/stone/android-log-levels.sh. Needs Android's property service.
+After=lxc-android-config.service
+Wants=lxc-android-config.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/lib/stone/android-log-levels.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
