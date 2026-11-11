@@ -1,0 +1,59 @@
+From 25d766c55fa9621ab78ed28d91dbdf23eb48a6ca Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <p0sixspwn8@gmail.com>
+Date: Wed, 11 Nov 2026 13:40:12 -0500
+Subject: [PATCH] dbus: fall back to the caller's AppArmor label by pid
+
+dbus-daemon puts LinuxSecurityLabel into GetConnectionCredentials only
+when the kernel supplies a peer label for the socket. Android vendor
+kernels used with Halium confine processes with AppArmor but lack the
+Ubuntu socket/D-Bus mediation patches, so the label is missing and every
+request was refused (Xiaomi Redmi Note 12 5G, 5.4 kernel). When it is
+missing, read the caller's confinement from the kernel by ProcessID
+(aa_gettaskcon). The verifier's policy is unchanged: only unconfined
+callers are trusted, and a confined caller still reports its profile.
+---
+ .../skeleton/daemon_credentials_resolver.cpp  | 21 +++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/src/biometry/dbus/skeleton/daemon_credentials_resolver.cpp b/src/biometry/dbus/skeleton/daemon_credentials_resolver.cpp
+index 4afba47..7ce61f3 100644
+--- a/src/biometry/dbus/skeleton/daemon_credentials_resolver.cpp
++++ b/src/biometry/dbus/skeleton/daemon_credentials_resolver.cpp
+@@ -28,6 +28,9 @@
+ #include <core/posix/this_process.h>
+ 
+ #include <sys/apparmor.h>
++#include <sys/types.h>
++
++#include <cstdlib>
+ 
+ #include <cstdint>
+ #include <map>
+@@ -67,6 +70,24 @@ biometry::Optional<std::string> app_armor_label_from(const ConnectionCredentials
+             label = std::string{con};
+     }
+ 
++    // dbus-daemon only reports LinuxSecurityLabel when the kernel gives it
++    // one (SO_PEERSEC on the socket). Kernels without the AppArmor socket and
++    // D-Bus mediation patches (e.g. Android vendor kernels on Halium) do not,
++    // although AppArmor itself confines processes. Then ask the kernel for
++    // the caller's confinement by process id instead.
++    if (!label)
++    {
++        if (auto entry = credentials.find("ProcessID"); entry != credentials.end())
++        {
++            char* con = nullptr;
++            if (aa_gettaskcon(static_cast<pid_t>(entry->second.as<std::uint32_t>()), &con, nullptr) >= 0 && con)
++            {
++                label = std::string{con};
++                free(con);
++            }
++        }
++    }
++
+     if (!label && is_running_in_a_testing_environment())
+         label = "unconfined";
+ 
+-- 
+2.53.0
+

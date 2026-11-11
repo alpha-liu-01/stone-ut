@@ -19,7 +19,7 @@ The phone has no passwordless sudo. Anything that needs root has to be run by th
 
 State at the start (2026-11-10):
 - `boot_b`: `e1554638…` (kernel `#13`).
-- New image (2026-11-11, not yet written): `0ea13aae…` (adds the refresh rate setting in System Settings > Brightness, item 11). Before it: `675fd590…` (kernel `#15` with the 60 Hz panel command fix, plus `stone-display-setup.service` and `stone-refresh-rate`), written and confirmed on 2026-11-11, kept as `out/halium14/boot-ut-675fd590.img`. `065ee6e5…` is kept as `out/halium14/boot-ut-065ee6e5.img`.
+- New image (2026-11-11, not yet written): `d302d1a1…` (adds the fingerprint fix, item 8). Before it: `0ea13aae…` (the refresh rate setting in System Settings > Brightness, item 11), written and running on 2026-11-11 (the Settings page is bind-mounted at boot), kept as `out/halium14/boot-ut-0ea13aae.img`. Before it: `675fd590…` (kernel `#15` with the 60 Hz panel command fix, plus `stone-display-setup.service` and `stone-refresh-rate`), written and confirmed on 2026-11-11, kept as `out/halium14/boot-ut-675fd590.img`. `065ee6e5…` is kept as `out/halium14/boot-ut-065ee6e5.img`.
 - Current `boot_b` (updated 2026-11-11): `065ee6e5…` (kernel `#14`; USB MTP, the media log levels, the microSD mount options and the GNSS service), written and confirmed on 2026-11-11. Earlier: `a706816c…` (log levels). Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
 - Ubuntu Touch 24.04-2.x, Halium 14, crDroid 14 vendor.
 - The deferred system update work is at the end of `docs/roadmap-hardware.md`.
@@ -44,7 +44,7 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
 5. Camera leftovers. Skipped 2026-11-11: already working (user). Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
 6. Power. Skipped 2026-11-11: already working (user). Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
 7. Location (GNSS). Pure Maps found no position (2026-11-11). The engine was fine but always cold-started: Qualcomm's `xtra-daemon` was not enabled, and the HAL was never told about the network, so there was no time or XTRA data. Fixed with `stone-gnss-netstate.service` (an indoor fix in about 30 s, 4 m accuracy). Done 2026-11-11: confirmed in Pure Maps. SUPL is left out (unimplemented upstream).
-8. Fingerprint reader. Not checked yet.
+8. Fingerprint reader. Done 2026-11-11: the vendor HAL was up, but the packaged biometryd 0.4.0 aborted on every D-Bus request (an Ubuntu-only dbus method that fails here). Fixed with biometryd main plus a patch for this kernel's missing D-Bus label, replacing only the daemon. Enrollment and lock-screen unlock work (user, confirmed in the logs).
 9. Smaller items:
    - the second SIM slot (only slot 1 has been tested; slot 2 is empty);
    - call volume keys (they change the media volume, not `Voice Rx Gain`);
@@ -520,9 +520,61 @@ The location item is done. What remains is optional or upstream (SUPL, satellite
 
 ## 8. Fingerprint reader
 
-Goal: enrolling a fingerprint and unlocking with it in Lomiri, if the vendor's fingerprint HAL can be reached.
+Goal: enrolling a fingerprint and unlocking with it in Lomiri, if the vendor's fingerprint HAL can be reached. The sensor is in the power button.
 
-What is seen: not checked yet.
+### Checked (2026-11-11, image `0ea13aae…`)
+
+- **Vendor side: fine.**
+  - `/vendor/bin/hw/android.hardware.biometrics.fingerprint@2.3-service.xiaomi` (`vendor.fps_hal`, `class late_start`, user `system`) runs, registered on hwbinder as `android.hardware.biometrics.fingerprint@2.1/2.2/2.3::IBiometricsFingerprint/default`.
+  - `android.hardware.gatekeeper@1.0::IGatekeeper/default` is there too; it issues the auth token that enrollment needs.
+  - Xiaomi's `vendor.xiaomi.hardware.mlipay` is also registered (payments, not needed).
+- **Ubuntu Touch side:**
+  - biometryd `0.4.0+0~20260423213326.36` (the 24.04-2.x release branch) is running.
+  - Its `android` device uses the old route: the Halium bridge `/system/lib64/libbiometry_fp_api.so` through libhybris.
+  - System Settings shows "Fingerprint" under Lock security when `Biometryd.available` is true, and it is.
+- **The first D-Bus request kills biometryd.** A QML client doing what Settings does (`Biometryd.defaultDevice.templateStore.size(user)`, `tools/phone-debug/fp-probe.qml`) gets `NoReply`. The daemon aborts with "boost::optional … Assertion `this->is_initialized()' failed" and systemd restarts it.
+  - 0.4.0 identifies the caller with `org.freedesktop.DBus.GetConnectionAppArmorSecurityContext`. That is an Ubuntu-only dbus method; here it fails with `AppArmorSecurityContextUnknown`.
+  - `DaemonCredentialsResolver` then calls `label.get()` on the empty optional before checking it.
+  - So enrolling in Settings, and fingerprint unlock, could never have worked.
+- **biometryd main fixes the crash, but not on this kernel.**
+  - Main (0.4.1, commit "dbus: Replace deprecated GetConnectionAppArmorSecurityContext") reads `LinuxSecurityLabel` from `GetConnectionCredentials`.
+  - On this phone that key is missing. AppArmor itself works (profiles load, apps are confined, the kernel log has denials). But the 5.4 vendor kernel has no Ubuntu AppArmor socket and D-Bus mediation: there is no `/sys/kernel/security/apparmor/features/dbus`, and `SO_PEERSEC` gives D-Bus no label.
+  - Without a label, main refuses every request.
+  - (Side note: for the same reason, dbus-daemon does not mediate D-Bus for confined apps on this kernel. That is a separate, wider issue.)
+- **Fix:** biometryd main plus one patch, `tools/biometryd/biometryd-0001-dbus-fall-back-to-apparmor-label-by-pid.patch`. When `LinuxSecurityLabel` is missing, it reads the caller's confinement from the kernel by `ProcessID` (`aa_gettaskcon`).
+  - The verifier's policy is unchanged: only `unconfined` callers are trusted (Lomiri, System Settings), and a confined app still reports its own profile.
+  - Main also replaces the libhybris bridge with direct hwbinder access (libgbinder: HIDL 2.1 and 2.3, or AIDL), with the gatekeeper auth token for enrollment and the template store at `/data/vendor_de/0/fpdata/`.
+- **The D-Bus protocol is unchanged** between 0.4.0 and main (no diff under `src/biometry/dbus` apart from the credentials resolver). So only the daemon is replaced; clients (Settings, Lomiri, the QML module) keep the packaged `libbiometry.so.2`.
+  - `usr/lib/stone/biometryd/biometryd` and `libbiometry.so.2` in the overlay;
+  - `etc/systemd/system/biometryd.service.d/zz-stone-biometryd.conf` (`ExecStart=` the new daemon, `LD_LIBRARY_PATH=/usr/lib/stone/biometryd`).
+- **Build:** `tools/biometryd/build.sh` (Docker, Ubuntu 24.04 with arm64 multiarch, the UBports 24.04-2.x repository, a CMake cross-build of biometryd main at `1005154b`, stripped).
+  - Output: `biometryd` sha256 `55975e1c…`, `libbiometry.so.2` `7792ee8e…`.
+  - On the phone, `biometryd list-devices` reports "android … connecting to the android fp hal using libgbinder".
+- Live install: `tools/phone-debug/stone-fingerprint-install.sh`, which also runs the query that crashed the old daemon.
+- Side finding: `biometryd enroll` in 0.4.0 binds `--user` to the `--device` variable; use it without `--user`. In-process, as phablet, it did start an enrollment on the HAL through the old bridge (`on_started`).
+
+### Result (2026-11-11)
+
+Live install (`stone-fingerprint-install.sh`, 13:49), then the user enrolled a finger in System Settings and turned on fingerprint unlock. User: "fingerprint works first try". Checked afterwards:
+- the new daemon (`ExecStart=/usr/lib/stone/biometryd/biometryd run`) has run since the install with `NRestarts=0`;
+- `fp-probe.qml` (as phablet, through D-Bus): `size OK: 1 enrolled fingerprint(s)`;
+- AccountsService `com.lomiri.AccountsService.SecurityPrivacy.EnableFingerprintIdentification` is `true`;
+- Lomiri on the lock screen:
+  - 13:50:50 "Identified user by fingerprint: 32011";
+  - 13:50:56 "Failed to identify user by fingerprint: FINGER_NOT_RECOGNIZED" (a wrong finger, refused);
+  - 13:50:59 identified again.
+
+Harmless log lines:
+- biometryd prints "dbus: Attempted to unregister path … which isn't registered" once per finished request (dbus-cpp).
+- Settings' stock `BioMetrics.qml` warns "Cannot anchor to an item that isn't a parent or sibling".
+
+Image `d302d1a1c34dd57005797b85f0f72e446ec25cc2df982f8624eb6d0fa713940c`: the `#15` kernel (byte-identical) plus the biometryd files (checksums as above) and the drop-in. Not yet written.
+
+### Still open (fingerprint)
+
+- Upstream: the label fallback patch (`tools/biometryd/`) and a 24.04-2.x release of biometryd main. When the packaged biometryd gets these, the drop-in and the two files can go.
+- After a reboot with the new image, a quick check that unlock still works. The templates live in the vendor HAL's store (`/data/vendor_de/0/fpdata/`), so they should survive.
+- Not checked: fingerprint for app authentication prompts (only the lock screen was tested).
 
 ## 9. Smaller items
 
