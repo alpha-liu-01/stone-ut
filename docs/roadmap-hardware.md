@@ -1,7 +1,7 @@
 # Hardware, after the display is up
 
 
-The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is `e1554638…` (kernel `#13`), written and confirmed on 2026-11-10: items 5 and 6 complete (including 3.5 mm and USB headsets), camera (item 7), and even key clicks on the speaker (item 3, kernel patch 0006). Built and not yet written: `boot-ut.img` `15c0d147ac13b42ad26862414086463929dc233fda74be8e67c4d5f066b4e80f` (kernel `#13`, unchanged; adds `stone-mms-route.service`, item 5). It changes nothing on a phone that already has the live install, so it can be written whenever convenient. Earlier images are kept in `out/halium14/` (`boot-ut-e1554638.img`, `boot-ut-71ac8a52.img`, `boot-ut-fc166f50.img`, `boot-ut-f054cb90.img`, `boot-ut-c286b311.img`, `boot-ut-819deb43.img`, `boot-ut-0fe04e7f.img`, `boot-ut-c1d90d44.img` with kernel `#9`, `boot-ut-data.img`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
+The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Items 1 to 7 are here. The hardware work after them continues in `docs/roadmap-hardware-2.md` (sensors and rotation first). Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is `e1554638…` (kernel `#13`), written and confirmed on 2026-11-10: items 5 and 6 complete (including 3.5 mm and USB headsets), camera (item 7), and even key clicks on the speaker (item 3, kernel patch 0006). Written after that: `e3d83362742ffbb39b97201f6e3509055d24bcde1af08cc2bed9cdd2c1afea9e` (kernel `#13`; adds `stone-mms-route.service`, item 5, and the sensors fixes, `docs/roadmap-hardware-2.md` item 1). Then `7d432e5dd15411b69863850e0b84d52cb48eebf1d6c185220a2846c586897709` (kernel `#14`, USB MTP, `docs/roadmap-hardware-2.md` item 2), written and confirmed on 2026-11-10; it is the current `boot_b`. Earlier images are kept in `out/halium14/` (`boot-ut-e3d83362.img`, `boot-ut-15c0d147.img`, `boot-ut-e1554638.img`, `boot-ut-71ac8a52.img`, `boot-ut-fc166f50.img`, `boot-ut-f054cb90.img`, `boot-ut-c286b311.img`, `boot-ut-819deb43.img`, `boot-ut-0fe04e7f.img`, `boot-ut-c1d90d44.img` with kernel `#9`, `boot-ut-data.img`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
 
 `/etc/os-release` is Ubuntu 24.04.5 LTS. The root filesystem comes from `ubuntu-touch-android9plus-rootfs-arm64.tar.gz` on the 24.04-2.x channel. adb is up, serial `stone`. Once mobile data was up on 2026-11-10, the phone clock went from 1970 to the correct time.
 
@@ -667,7 +667,7 @@ Working, confirmed by the user on a live test of all fixes: rear camera preview 
 ### Still open or untested (camera)
 
 - Not tested yet: flash and torch (the flash shares pin 38 with the sensors, so the fix in patch 0005 matters for it too), tap-to-focus and zoom, the barcode-reader app (`camera.ubports_barcode-reader`), the camera after a clean boot of `71ac8a52…` (so far all fixes were live overlays).
-- Photo orientation: there is no Android sensors HAL (init asks for `android.hardware.sensors@2.x/1.0` once a second; the app logs "There is no sensor manager yet"), so the app cannot know the phone's orientation; photos taken in landscape are probably stored as portrait. Proximity during calls is likely affected too. Separate item.
+- Photo orientation (correction, 2026-11-10: a sensors HAL does exist; it is the AIDL `android.hardware.sensors-service.xiaomi-multihal`. sensorfwd could not talk to it because of libgbinder's protocol setting, see `docs/roadmap-hardware-2.md` item 1): there is no Android sensors HAL (init asks for `android.hardware.sensors@2.x/1.0` once a second; the app logs "There is no sensor manager yet"), so the app cannot know the phone's orientation; photos taken in landscape are probably stored as portrait. Proximity during calls is likely affected too. Separate item.
 - The depth sensor is unused (no portrait/bokeh mode). Xiaomi's bokeh pipeline would need its AlgoControl node fed with the metadata MIUI's camera app sends.
 - Playback of the recorded videos belongs to the hardware video decoder item.
 - Debugging notes: Android `logcat` returns nothing here, from the Ubuntu side and inside the container; tombstones (world-readable in `/data/tombstones`), `debuggerd` inside the container with the container's PIDs, `/dev/binderfs/binder_logs/` and the kernel log are what work. `tools/phone-debug/stone-camera-debug.sh` and `stone-camera-test.sh` (root) collect them and apply the fixes live.
@@ -680,7 +680,7 @@ Working, confirmed by the user on a live test of all fixes: rear camera preview 
 - Why: every camera sensor and the flash use TLMM pin 38 (GPIO 393: TLMM is `gpiochip0`, base 355) as their VIO enable, as `gpio-custom1` (`CAM_VIO0/1/2/CAM_VIO`, the flash's `CUSTOM_GPIO1`). The DT's `qcom,cam-res-mgr` lists only `gpios-shared = <407>`, which is copied from the Qualcomm reference board (`blair-camera-sensor-qrd.dtsi`, its flash enable pin) and is pin 52 here, unused. So the second sensor's `gpio_request` gets `-EBUSY`, `no_gpio` is set, and `cam_sensor_core_power_up()` aborts at the first reset step. Only a `CUSTOM_GPIO1` step was allowed to continue.
 - Stock does not stumble on this because Xiaomi's prebuilt `/vendor/lib/modules/camera.ko` continues power-up after a failed gpio request: its strings have `request gpio failed,still do power up` and no aborting variant, next to the same `custom_gpio1_powernum` reference count that this tree has. Xiaomi's own kernel tree (`android_kernel_xiaomi_stone`) has the same aborting code as ours.
 - Fix (`kernel/patches/0005-cam-sensor-continue-power-up-on-shared-gpio.patch`, kernel `#12`): when the gpio table request fails with `-EBUSY` (another camera device holds a shared pin), log it and continue the power-up; any other gpio error still aborts. The shared pin is already driven by its holder, and `custom_gpio1_powernum` keeps it up until the last user powers down. Putting pin 38 into `cam_res_mgr`'s shared list instead was rejected: its own on/off counting would double up with `custom_gpio1_powernum` and could leave VIO on after the camera is closed.
-- Seen on the way, not camera: init asks for an Android sensors HAL (`android.hardware.sensors@2.1/2.0/1.0`) once a second and finds none, and the camera app logs "There is no sensor manager yet" (no orientation sensor; proximity during calls likely affected too). `vndservicemanager` and `mediaextractor` abort on every boot (tombstones 00 to 49).
+- Seen on the way, not camera (the HAL does exist, see the correction above): init asks for an Android sensors HAL (`android.hardware.sensors@2.1/2.0/1.0`) once a second and finds none, and the camera app logs "There is no sensor manager yet" (no orientation sensor; proximity during calls likely affected too). `vndservicemanager` and `mediaextractor` abort on every boot (tombstones 00 to 49).
 
 ### Events
 
@@ -700,3 +700,32 @@ Working, confirmed by the user on a live test of all fixes: rear camera preview 
 - Made permanent: the CamX setting and the property through `stone-vendor-fixups.py` (tested on copies of the vendor files: only the `MultiCameraEnable` line changes, `build.prop` gains `persist.vendor.camera.mapid=0`, modes 644/600 kept), `libaudioclient` through `build-boot-image.sh`.
 - New `boot-ut.img` SHA256 `71ac8a5293fd6ee3702047831bcc7c748ef11b9550efd35eae0f4e652f41c150` (kernel `#12`, everything in `fc166f50…` plus the two camera fixes above; `fc166f50…` kept as `out/halium14/boot-ut-fc166f50.img`). Unpacked and checked: the patched `libaudioclient.so` (`5fe2f500…`, 644) in the overlay, the new `stone-vendor-fixups.py`. Written by the user; the camera was confirmed working after the flash.
 - Waiting for the user: flash, then without running the test script: rear and front preview and photos, video on both, flash/torch, tap-to-focus. After that `~/stone-camera-test.sh`, `~/stone-camera-debug.sh`, `~/libaudioclient-patched.so` and `~/camera-debug/` on the phone can go (and, as root, `/data/local/tmp/{libaudioclient.so,camxoverridesettings.txt,camera-logcat.txt*}` in the container).
+
+## Deferred: system updates (after the build is fully working)
+
+Decided on 2026-11-10: this comes after the hardware work in `docs/roadmap-hardware-2.md`, not before.
+
+What is seen:
+
+- The phone is on Ubuntu Touch 24.04-2.x, the newest series. The rootfs is the CI build of the `ubports/24.04-2.x` branch, apt uses `deb http://repo.ubports.com/ 24.04-2.x main`, and `/etc/apt/preferences.d` pins `o=UBports,a=24.04-2.x` at 2000.
+- It is a snapshot of the branch, not a numbered release. For example, `morph-browser-qt6 1.99.4` was built 2026-10-30, and QtWebEngine is 6.11.2.
+- There is no OTA channel: `/etc/system-image/config.d` is empty, so Settings → Updates does not update the system. The update path is apt.
+- 26.04 is not a target yet. As of August 2026 it was a hidden test channel with no release date, and moving to it would mean redoing much of the port.
+
+What has to be done before `apt full-upgrade` is safe:
+
+1. The image ships copies of two programs, patched from the exact versions in `out/halium14/rootfs-tree`:
+   - `/usr/lib/stone/media-hub-server` (package `media-hub`, `tools/patch-media-hub.py`);
+   - `/usr/bin/lomiri-telephony-service-handler-stone` (package `lomiri-telephony-service`, `tools/patch-telephony-ports.py`).
+
+   After an upgrade of those packages, the copies would be stale: they could break against the new libraries, and they would miss the upstream fixes.
+   - Stop-gap: `sudo apt-mark hold media-hub lomiri-telephony-service`.
+   - Real fix: patch at boot from whatever binary is installed, the way `stone-vendor-fixups.py` works for the vendor files. Both patch scripts check SHA256 hashes, so an unknown version is left unpatched (and reported) instead of patched blindly. A new upstream version then needs its offsets updated in the patch script.
+2. Packages this port's fixes depend on. After an upgrade of these, check calls, data and MMS again:
+   - `ofono-sailfish`: context handling, `Settings.Proxy` on internet contexts, `InUse` on active contexts.
+   - `nuntium`: the MMS context selection in `GetMMSContexts`.
+   - `sensorfw-qt5` and `libsensorfw-qt5-hidl`: the AIDL path.
+   - `libgbinder`: presets.
+   - `pulseaudio`: the UCM card.
+3. `lineageos-apndb`: `build-boot-image.sh` builds `/usr/share/stone/apns-conf.xml` from the copy in `rootfs-tree`. A newer apndb on the phone does not reach that copy until the image is rebuilt from an updated tree.
+4. Then: `sudo apt update && sudo apt full-upgrade` on the phone. Rebuilding the rootfs from a newer CI tarball is the wrong way: it means reinstalling the rootfs.
