@@ -5,10 +5,12 @@
 # is the UCM profile /usr/share/stone/ucm2/stone/HiFi.conf, applied by
 # PulseAudio when lomiri-telephony-service switches the sink.primary port.
 # What the vendor HAL would still do on top of its mixer paths is here:
-# hold the hostless VoiceMMode1 PCM (device 2) open in both directions, which
-# makes msm-pcm-voice start the voice session, and send the mute controls.
+# hold the hostless voice PCM open in both directions, which makes
+# msm-pcm-voice start the voice session, and send the mute controls.
+# SIM 1 (subscription 1) calls use the VoiceMMode1 session (device 2, vsid
+# 0x11C05000), SIM 2 calls VoiceMMode2 (device 15, vsid 0x11DC5000): "sub2".
 #
-# usage: call-audio.sh on [muted] | off | mute 0|1 | gain DB
+# usage: call-audio.sh on [muted] [sub2] | off | mute 0|1 | gain DB
 #        call-audio.sh route earpiece|speaker|bluetooth|headphones|headset|usb
 #                                                          (debug)
 #        call-audio.sh rec-ul [secs] [file]               (debug)
@@ -44,8 +46,9 @@ gain() {
 # the NULL dma_area copy panicked the kernel). The holder only opens,
 # configures and starts both directions until "off" kills it.
 HOLD=${STONE_VOICE_HOLD:-$DIR/voice-pcm-hold.py}
+VOICE_PCM=2               # VoiceMMode1; 15 = VoiceMMode2
 pcm_on() {
-    python3 -I "$HOLD" hw:$CARD,2 "${1:-both}" &
+    python3 -I "$HOLD" hw:$CARD,$VOICE_PCM "${1:-both}" &
     echo $! >> "$PIDS"
 }
 pcm_off() {
@@ -55,12 +58,16 @@ pcm_off() {
 
 case "$1" in
     on)
+        muted=0
+        for a in "$2" "$3"; do
+            case "$a" in muted) muted=1 ;; sub2) VOICE_PCM=15 ;; esac
+        done
         pcm_off
         pcm_on
         # The session only exists once both directions are prepared.
         sleep 0.5
         device_unmute
-        if [ "$2" = muted ]; then voice_mute 1; else voice_mute 0; fi
+        voice_mute $muted
         ;;
     off) pcm_off ;;
     mute) voice_mute "${2:-1}" ;;

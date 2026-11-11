@@ -19,7 +19,7 @@ The phone has no passwordless sudo. Anything that needs root has to be run by th
 
 State at the start (2026-11-10):
 - `boot_b`: `e1554638…` (kernel `#13`).
-- New image (2026-11-11, not yet written): `d302d1a1…` (adds the fingerprint fix, item 8). Before it: `0ea13aae…` (the refresh rate setting in System Settings > Brightness, item 11), written and running on 2026-11-11 (the Settings page is bind-mounted at boot), kept as `out/halium14/boot-ut-0ea13aae.img`. Before it: `675fd590…` (kernel `#15` with the 60 Hz panel command fix, plus `stone-display-setup.service` and `stone-refresh-rate`), written and confirmed on 2026-11-11, kept as `out/halium14/boot-ut-675fd590.img`. `065ee6e5…` is kept as `out/halium14/boot-ut-065ee6e5.img`.
+- New image (2026-11-11, not yet written): `fced82d0…` (adds SIM 2 call audio, item 9). Before it: `45e50e0d…` (the NFC presence check and `stone-ir`, item 9; it superseded `07ce6de3…`, which was never written), written and booted on 2026-11-11 at 15:56, kept as `out/halium14/boot-ut-45e50e0d.img`. Before that: `c57e8b19…` (the incoming-call SLIMbus rate fix for wideband Bluetooth calls, item 9). Before it: `9a9590c4…` (kernel `#17`, wideband Bluetooth calls), written 2026-11-11, kept as `out/halium14/boot-ut-9a9590c4.img`. That one includes `f4a9cf05…` (the in-call volume fix, item 9), which was built but never written, kept as `out/halium14/boot-ut-f4a9cf05.img`. Before it: `d302d1a1…` (the fingerprint fix, item 8), written and booted on 2026-11-11 at 13:53, kept as `out/halium14/boot-ut-d302d1a1.img`. Before it: `0ea13aae…` (the refresh rate setting in System Settings > Brightness, item 11), written and running on 2026-11-11 (the Settings page is bind-mounted at boot), kept as `out/halium14/boot-ut-0ea13aae.img`. Before it: `675fd590…` (kernel `#15` with the 60 Hz panel command fix, plus `stone-display-setup.service` and `stone-refresh-rate`), written and confirmed on 2026-11-11, kept as `out/halium14/boot-ut-675fd590.img`. `065ee6e5…` is kept as `out/halium14/boot-ut-065ee6e5.img`.
 - Current `boot_b` (updated 2026-11-11): `065ee6e5…` (kernel `#14`; USB MTP, the media log levels, the microSD mount options and the GNSS service), written and confirmed on 2026-11-11. Earlier: `a706816c…` (log levels). Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
 - Ubuntu Touch 24.04-2.x, Halium 14, crDroid 14 vendor.
 - The deferred system update work is at the end of `docs/roadmap-hardware.md`.
@@ -46,10 +46,10 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
 7. Location (GNSS). Pure Maps found no position (2026-11-11). The engine was fine but always cold-started: Qualcomm's `xtra-daemon` was not enabled, and the HAL was never told about the network, so there was no time or XTRA data. Fixed with `stone-gnss-netstate.service` (an indoor fix in about 30 s, 4 m accuracy). Done 2026-11-11: confirmed in Pure Maps. SUPL is left out (unimplemented upstream).
 8. Fingerprint reader. Done 2026-11-11: the vendor HAL was up, but the packaged biometryd 0.4.0 aborted on every D-Bus request (an Ubuntu-only dbus method that fails here). Fixed with biometryd main plus a patch for this kernel's missing D-Bus label, replacing only the daemon. Enrollment and lock-screen unlock work (user, confirmed in the logs).
 9. Smaller items:
-   - the second SIM slot (only slot 1 has been tested; slot 2 is empty);
-   - call volume keys (they change the media volume, not `Voice Rx Gain`);
-   - wideband Bluetooth calls (mSBC);
-   - the IR emitter and NFC, if the hardware has them.
+   - the second SIM slot: done 2026-11-11 (data, VoLTE and calls worked; call audio needed the SIM 2 DSP voice session, `VoiceMMode2`);
+   - call volume keys (they changed the media volume): done 2026-11-11, now the codec gain of the call route (earpiece, speaker, 3.5 mm);
+   - wideband Bluetooth calls (mSBC): done 2026-11-11 (kernel patch 0009, the router's SLIMbus rate, `enable_msbc=true`);
+   - the IR emitter and NFC, if the hardware has them. NFC: this unit (`sunstone_cn`) has none; nfcd is gated on the chip being present (done 2026-11-11). IR: done (`stone-ir` over standard LIRC; a Samsung TV switched off and on).
 10. GPU and graphics APIs. Checked 2026-11-11: the UI uses the intended path (Mir `graphics-android2` with Adreno GLES 3.2 through libhybris), and Vulkan 1.1 works through `libvulkan1-hybris`. Desktop OpenGL is software only (Mesa llvmpipe). No fix needed for the system; options for hardware desktop GL are recorded.
 11. 120 Hz display. Added 2026-11-11: the panel ran at 120 Hz, but the UI never got past 60 fps. Two causes: the system compositor waited for the previous frame's present fence after every frame (two vsyncs per frame), and the GPU governor kept the GPU at 266 MHz while scrolling. Fixed with `stone-display-setup.service` and kernel `#15` (the 60 Hz panel command). The 60/120 Hz choice is in System Settings > Brightness (and `stone-refresh-rate`). Done 2026-11-11.
 
@@ -578,10 +578,233 @@ Image `d302d1a1c34dd57005797b85f0f72e446ec25cc2df982f8624eb6d0fa713940c`: the `#
 
 ## 9. Smaller items
 
-- The second SIM slot.
-- Call volume keys controlling the call volume (`Voice Rx Gain`) instead of the media volume (`docs/roadmap-hardware.md` item 6).
-- Wideband Bluetooth calls (mSBC). Calls are now narrowband CVSD with `enable_msbc=false`.
-- The IR emitter and NFC: first check whether this model has them.
+- ~~The second SIM slot~~: done 2026-11-11, see "SIM 2 calls" below.
+- ~~Call volume keys controlling the call volume instead of the media volume~~ (`docs/roadmap-hardware.md` item 6): done, see "In-call volume" below.
+- ~~Wideband Bluetooth calls (mSBC)~~: done 2026-11-11, see "Wideband Bluetooth calls" below.
+- The IR emitter and NFC: first check whether this model has them. NFC: see "NFC" below (this unit has none; nfcd now runs only where a chip answers; live test pending). IR: done, see "IR emitter" below (the vendor HAL speaks a Xiaomi-only driver protocol; `stone-ir` uses the kernel's standard LIRC and drives a Samsung TV).
+
+### SIM 2 calls (2026-11-11)
+
+User test with the Fizz SIM moved to slot 2:
+- data, VoLTE and placing and receiving calls all work;
+- **no audio in either direction**, on any output (earpiece, speaker, Bluetooth);
+- SIM 1 right after was fine.
+
+Cause:
+- Each SIM has its own voice session in the DSP, and the modem uses the one of the SIM the call is on: SIM 1 `VoiceMMode1` (vsid `0x11C05000`), SIM 2 `VoiceMMode2` (`0x11DC5000`).
+- `call-audio.sh` always held the `VoiceMMode1` PCM (device 2), and the UCM profile routed only `VoiceMMode1` (23 `cset`s: the RX voice mixers per output, the `VoiceMMode1_Tx` mixers per mic). So a SIM 2 call had no running session.
+- `audiosystem-passthrough-qti` receives qcril's vsid parameters but does not log them, and nothing on this stack consumes them.
+
+Fix:
+- **`HiFi.conf`:** every `VoiceMMode1` route has its `VoiceMMode2` twin next to it (`…_Voice Mixer VoiceMMode2`, `VoiceMMode2_Tx Mixer …_MMode2`; all exist on this card). A route alone starts no session, so both are set.
+- **`call-audio.sh on [muted] [sub2]`:** `sub2` holds `VoiceMMode2` (device 15) instead of device 2. The mute controls already address all sessions (`0xFFFFFFFF`).
+- **`call-audio-router.py`:** `voice_sub()` takes the subscription from the ofono call path (`/ril_1/…` = SIM 2) of the calls in a voice state. The session is restarted when that changes, and the log reads "call audio on: <port>, SIM n".
+
+Checked without a call:
+- `voice-pcm-hold.py hw:holiqrdsku1sndc,15` on the old profile fails with "ASoC: no backend DAIs enabled for VoiceMMode2", as expected.
+- With `RX_CDC_DMA_RX_1_Voice Mixer VoiceMMode2` and `VoiceMMode2_Tx Mixer TX_CDC_DMA_TX_3_MMode2` set by hand, it starts ("started (both)"), and the routes were cleared afterwards.
+- The new profile parses (`alsaucm` lists the verb and its devices).
+
+Live install: `tools/phone-debug/stone-sim2-voice-install.sh` (sudo; it restarts PulseAudio to reload the profile, so not during a call).
+
+Live test (2026-11-11, user: "the fix works"). The router logged:
+- incoming SIM 2 call: "call audio on: [Out] Earpiece, SIM 2", then Speaker and back to Earpiece (each restart on SIM 2);
+- outgoing SIM 2 call: Earpiece, SIM 2;
+- then a SIM 1 call: "Earpiece, SIM 1".
+
+The live-installed files were byte-identical to the repository's.
+
+Image `fced82d049d8cb29e281f38933d133604ead80d69f733752eeec84986dfe8c81`: kernel `#17` (byte-identical), plus the new `HiFi.conf`, `call-audio.sh` and router (byte-identical to the tested ones). Not yet written.
+
+Not covered: calls on both SIMs at once (one held while the other is active). `voice_sub()` picks SIM 2 only when every call in a voice state is on SIM 2, and SIM 1 otherwise; untested.
+
+### NFC (2026-11-11)
+
+The stone family is three models on one device tree and one vendor image: one SM6375 and two SM4375. Only some SKUs have NFC. This unit is `androidboot.product.hardware.sku=sunstone_cn` and has no NFC (user, and checked below). The st21nfc driver has a commented-out Xiaomi check that names the NFC SKUs: `moonstone_p_global` and `sunstone_global`.
+
+What runs on this unit:
+- **Device tree:** `st21nfc@8` on `i2c@4a80000` (`st,st21nfc`, status `ok`, with irq/reset/clkreq GPIOs 9/6/7, pinctrl and `nfc_ref_clk`), the same on every SKU.
+- **Kernel:** I2C device `0-0008` exists but no driver is bound and there is no `/dev/st21nfc`.
+  - The probe (`st21nfc_probe`) does not fail on GPIOs or the device tree. It resets the chip and waits for the NCI `CORE_RESET_NTF` (`st21nfc_ping`), and fails without it: no chip answered.
+  - The boot messages were already gone (the 256K kernel log wraps, and journald does not keep kernel messages here), but the device is not waiting for a supplier.
+- **Vendor:**
+  - `android.hardware.nfc@1.2-service.st` runs (uid `nfc`, steady, CPU use negligible).
+  - The vendor declares `android.hardware.nfc*.xml` unconditionally (no per-SKU permission folders), so crDroid does not tell the SKUs apart either.
+- **Ubuntu Touch:**
+  - `nfcd` (`/usr/sbin/nfcd -p /usr/lib/nfcd/plugins`, binder plugin) publishes `/nfc0` through that HAL as enabled, powered, modes 15, even without a chip.
+  - System Settings shows its NFC page whenever `GetAdapters` is non-empty (`NfcDbusHelper::hasAdapter()`), so it showed a switch that does nothing.
+- **Permissions:** `/dev/st21nfc` (and `nq-nci`, `nfc-nci`) are already given to `nfc:nfc 0660` by `70-sunstone.rules`, generated from the vendor `ueventd.rc`.
+
+Fix: `etc/systemd/system/nfcd.service.d/zz-stone-nfc-hw.conf`.
+- It runs nfcd only if `/dev/st21nfc`, `/dev/nq-nci` or `/dev/nfc-nci` exists. The node only appears when a chip answered the reset; the NQ nodes cover a variant with Qualcomm's controller (`CONFIG_NFC_QTI_I2C` is built).
+- **This unit:** no nfcd, so no adapter, and Settings hides NFC. Nothing D-Bus-activates nfcd; without it `hasAdapter()` gets an invalid reply and returns false.
+- **NFC SKUs:** nfcd runs as before, on the vendor HAL. Untested: there is no such unit here.
+- The vendor HAL keeps running in the container on every SKU, as on Android; it is idle without a client.
+
+Live install: `tools/phone-debug/stone-nfc-install.sh` (sudo).
+
+Result (2026-11-11): the user confirmed the NFC entry is gone from System Settings. `nfcd.service`: `ConditionResult=no`, inactive, and no `org.sailfishos.nfc.daemon` on the bus. Image `07ce6de313351c0785fab5f388ca14911357405b8600506ec0bff9fd708607a0` (kernel `#17`, plus the drop-in), kept as `out/halium14/boot-ut-07ce6de3.img`. It was not written: the phone rebooted at 15:34 with the live-installed drop-in (15:33 timestamp, not the overlay's boot-time one), so `c57e8b19…` is what runs (kept as `out/halium14/boot-ut-c57e8b19.img`). It is superseded by `45e50e0d…` (IR emitter section).
+
+### IR emitter (2026-11-11)
+
+This unit has one (as does Android: `android.hardware.consumerir`).
+- **Kernel:** the mainline `ir-spi` driver (`drivers/media/rc/ir-spi.c`, `CONFIG_IR_SPI`, LIRC) on SPI bus `4a88000.spi`: `/sys/class/rc/rc0` ("IR SPI") and `/dev/lirc0` (`root:video 0660`; phablet is in `video`).
+- **Vendor:** `android.hardware.ir@1.0-service` (user `system`) with Xiaomi's `consumerir.holi.so`, registered as `android.hardware.ir@1.0::IConsumerIr/default`.
+- **Over hwbinder as phablet:**
+  - `getCarrierFreqs` → 30, 33, 36, 38, 40 and 56 kHz;
+  - `transmit(38000, [500, 500, 500])` → **false**.
+- **First guess, permissions — wrong.** `init.xiaomi.rc` gives `/dev/lirc0` to `system` with mode 0666, which does not happen here. A live udev rule doing the same changed nothing; transmit still failed (user, with `stone-ir samsung-tv power`). The rule was dropped. (Debian's `80-debian-compat.rules` also re-sets `GROUP="video"` after it.)
+- **Real cause:** `consumerir.holi.so` is written for Xiaomi's own variant of the driver (disassembly of its transmit).
+  - It modulates the carrier itself into a raw SPI bitstream (bits at a fixed clock; the buffer is rounded up to 1024 bytes).
+  - It then calls `ioctl(fd, 0x40046911 = LIRC_SET_SEND_MODE, &length)` ("ir-spi set length error") and `write()`s the bitstream.
+  - Mainline LIRC accepts only `LIRC_MODE_PULSE` there, so the vendor HAL can never transmit on this kernel.
+- **The standard interface works.** On `/dev/lirc0` as phablet: features `0x302` (send pulses, set carrier, set duty cycle), send mode `LIRC_MODE_PULSE`; `LIRC_SET_SEND_CARRIER` 38000 and `LIRC_SET_SEND_DUTY_CYCLE` 50 succeed, and writing `[500, 500, 500]` returns 12 bytes. Ubuntu Touch has no Android consumer of the HAL anyway.
+- **Fix: `usr/bin/stone-ir`**, which drives `/dev/lirc0` directly in pulse mode (carrier, 33 % duty cycle, durations in µs):
+  - `info`;
+  - `samsung ADDR CMD`, plus a `samsung-tv` key table (address 0x07; `power` = 0x02 = the well-known `E0E040BF`);
+  - `nec ADDR CMD` (8- and 16-bit addresses);
+  - `raw FREQ durations…`;
+  - `-r N` repeats.
+
+  Encodings checked on the host: Samsung 0x07/0x02 → `E0E040BF`, NEC 0x04/0x08 → `20DF10EF` (the well-known LG power code).
+- Ubuntu Touch has no consumer-IR API or remote app; `stone-ir` is the test, and a user-facing remote would be a separate app. Making the vendor HAL work would need Xiaomi's driver variant (its "set length" protocol) in the kernel; not needed for Linux tools.
+
+Result (2026-11-11): `stone-ir samsung-tv power` turned the user's Samsung TV off and on again. Done.
+- On the phone, `/dev/lirc0` stays `system`, mode 0666, until the next reboot (the dropped rule's leftovers); `root:video 0660` is all `stone-ir` needs.
+- Image `45e50e0d2ad6ea301c427d46f8097067fba50d8e4a75820f164466c210d3f69c`: kernel `#17` (byte-identical), plus `usr/bin/stone-ir` (byte-identical to the tested one) and the NFC drop-in. No udev rule for IR. Not yet written.
+- A first build had a host-side `usr/bin/__pycache__` (from loading `stone-ir` to check its encodings); it was removed and the image rebuilt.
+- Not done: a user-facing remote app (Ubuntu Touch has none). Other TV brands need their codes (`nec`/`raw`); Hisense not tried.
+
+### Wideband Bluetooth calls (mSBC, 2026-11-11)
+
+How Bluetooth call audio flows here (`docs/roadmap-hardware.md` item 6):
+- PulseAudio's ofono backend with UBports' "SCO over PCM" patch (`0911-bluetooth-bluez5-bring-back-SCO-over-PCM-support.patch`). PulseAudio only *acquires* the transport: ofono opens the SCO socket, and holding `source.fake.sco` keeps the link up.
+- The audio itself goes chip ↔ SLIMbus (`SLIMBUS_7`, btfmslim) ↔ DSP voice session, never over HCI.
+- `enable_msbc=false` kept the link CVSD at 8 kHz.
+
+What wideband needs, and what was there:
+- **The parts support it.**
+  - Headset: the Moondrop Nekocake HFP record has `SupportedFeatures 0x0035`, which includes wideband speech (bit 5).
+  - Controller: the supported-commands octet 29 = `0xfe`, which includes Enhanced Setup (bit 3) and Enhanced Accept Synchronous Connection (bit 4).
+  - ofono 1.30: AG codec negotiation (`ofono_emulator_start_codec_negotiation`, `+BCS`); it offers it when the audio agent registers mSBC.
+  - PulseAudio 16.1's ofono backend registers mSBC with `enable_msbc`.
+  - DSP: `BT SampleRate`/`RX`/`TX` offer `KHZ_16` for `SLIMBUS_7`.
+- **The missing piece was the kernel.**
+  - For mSBC, ofono sets `BT_VOICE_TRANSPARENT`. Linux 5.4 then sends the legacy Setup Synchronous Connection with transparent air coding, where the controller expects ready-made mSBC frames.
+  - On this device those come from the PCM side, where the DSP delivers linear PCM, so the result would be noise.
+  - Android instead uses Enhanced Setup with the codec in the controller (`esco_parameters.cc`, mSBC T2/T1 with offload): mSBC on air, 16 kHz 16-bit linear PCM on the PCM data path.
+  - Linux only gained Enhanced Setup and codec offload in 5.14.
+
+Fix:
+- **`kernel/patches/0009-bluetooth-msbc-sco-offload-via-enhanced-setup.patch`** (kernel `#17`):
+  - `hci.h`: `HCI_OP_ENHANCED_SETUP_SYNC_CONN` (0x043d) and `HCI_OP_ENHANCED_ACCEPT_SYNC_CONN_REQ` (0x043e), with the 57-byte parameter block (size-checked: 59/63 bytes per the Core spec).
+  - `hci_setup_sync()`: transparent links use Enhanced Setup when the controller supports it and `bluetooth.sco_offload_msbc` is on (default; writable at runtime). The values are Android's:
+    - air: mSBC (0x05), 8000 B/s, frame size 60;
+    - PCM side: linear PCM, 32000 B/s, 16-bit two's complement, data path PCM (1);
+    - packet types, latency and retransmission from the existing T2/T1 table, so its retry logic still applies.
+  - `sco_conn_defer_accept()`: Enhanced Accept for a link the headset initiates.
+  - Command-status cleanup for the new command.
+  - CVSD links are unchanged.
+  - `bluetooth.sco_offload_msbc_active` (read-only) counts the connected offloaded links.
+  - Kernel log lines: "mSBC: enhanced setup…", "mSBC: offloaded link up (N active)".
+- **`etc/pulse/stone-touch.pa`:** `enable_msbc=true`.
+- **`call-audio-router.py`, `bt_rate()`:** before it starts the voice session on `[Out] Bluetooth`, it waits up to 3 s for the (e)SCO link (`hcitool con`), then sets `BT SampleRate`/`RX`/`TX`:
+  - `KHZ_16` if `sco_offload_msbc_active` > 0;
+  - `KHZ_8` otherwise (the UCM default for CVSD).
+
+  It logs which. PulseAudio and ofono do not report the negotiated codec in SCO-over-PCM mode (the card's `bluetooth.codec` is set before the link exists), so the router reads it from the kernel.
+
+Test image `9a9590c4ddfda1dee229ed235eeef8337091c00383252ce758c947b1c0d5d11a`: kernel `#17` (`9ef719cd…`; `#15` kept as `out/halium14/Image-15`; `#16` was an intermediate build without the counter), plus the in-call volume fix, since `f4a9cf05…` was never flashed (kept as `out/halium14/boot-ut-f4a9cf05.img`).
+
+Fallback without a reflash: `pactl unload-module module-bluez5-discover` and load it again with `enable_msbc=false` (as phablet). New links are then CVSD as before.
+
+First live test (image `9a9590c4…`, kernel `#17`, 2026-11-11): **Bluetooth calls completely silent**, both directions; earpiece and speaker fine. Two incoming calls, both routed to the earbuds.
+- **ofono:** negotiated mSBC at the first ring (`+BCS: 2`, `AT+BCS=2`, 98.8 s).
+- **Kernel:** never sent the setup (no "mSBC:" line), and no (e)SCO link came up. The router logged "no SCO link, SLIMBUS_7 KHZ_8".
+- **PulseAudio:** every later Acquire got `org.ofono.Error.InProgress`, also when switching the card to `handsfree_head_unit` long after the calls. ofono's card was stuck with a pending connect:
+  - `bcs_cb()` → `connect_sco()` → `ofono_handsfree_card_connect_sco()` returned 0 (else it would have fallen back to CVSD with `+BCS: 1`);
+  - so a non-blocking SCO `connect()` was started that never completed or failed;
+  - ofono sets no timeout on it.
+- **After reconnecting the earbuds** (`bluetoothctl disconnect` / `connect`, which resets ofono's card), the same chain worked twice without a call: card to `handsfree_head_unit`, `source.fake.sco` opened. Each time:
+  - "mSBC: enhanced setup, controller codec, PCM path (attempt 1)";
+  - then "offloaded link up (1 active)" 65–85 ms later;
+  - `hcitool con` showed the eSCO link, and `sco_offload_msbc_active` was 1.
+  - The second run was several minutes after the first, with the codec already negotiated (no `+BCS`).
+
+  So the kernel patch and the negotiation work; the stall is specific to the call.
+- **Candidate cause, unconfirmed:** an existing SCO `hci_conn` that is neither open nor closed (for example a link the earbuds tried to open at the ring). `hci_connect_sco()` then returns without calling `hci_setup_sync()`, and the socket waits forever.
+- **Next:** a call with an HCI trace (`tools/phone-debug/stone-bt-call-debug.sh`, sudo: `btmon` plus the kernel, ofono, PulseAudio and router logs).
+- **Traced test** (`stone-bt-call-debug.sh`, output in `out/halium14/logs/bt-call-msbc/`): the outgoing call worked, with sound both ways; the **incoming call was still silent**.
+  - ofono did not hang this time. Both calls got an mSBC link: the HCI trace shows Enhanced Setup with mSBC on air, linear PCM 16-bit, data path 0x01, packet type `0x0380`, latency 13, retransmission 2. The completion reported eSCO, air mode Transparent, 60-byte packets, interval 12 slots. The kernel logged "offloaded link up", and the router chose `KHZ_16` for both calls.
+  - The difference is in the SLIMbus channels. Incoming call:
+    - RX (port 16, downlink to the chip) opened at 1148.07 s at **8000 Hz**;
+    - TX opened at 1150.15 s at 16000 Hz.
+
+    Outgoing call: both at 16000 Hz.
+  - Cause: on an incoming call, telephony-service moves the route to Bluetooth while the ringtone plays. PulseAudio's media stream (MultiMedia5 → `SLIMBUS_7_RX`) then starts the back end at the UCM default of 8 kHz, before the router sets the rate. The voice session joins the back end at 8 kHz while the chip expects 16 kHz PCM.
+  - Fix in `bt_rate()`: `pactl suspend-sink sink.primary 1` and `suspend-source source.primary 1` (which closes PulseAudio's side of the back end), set the rate, resume both, then start the voice session.
+  - The first test's ofono hang has not come back; if it does, the HCI trace will show it.
+- **Live test of the fix** (router live-installed, 2026-11-11, user: "both calls worked"):
+  - Incoming call: the ringtone again opened SLIMbus RX at 8000 Hz (1485.56 s); the router suspended and reopened it at 16000 Hz (1490.87 s), and TX at 16000 Hz (1491.02 s), before the voice session.
+  - Outgoing call: 16000 Hz throughout.
+  - Both links were mSBC ("offloaded link up").
+- Image `c57e8b19f92b477041c5b9e176568a29000ea28672175782a454a0cb59ffb524`: kernel `#17` (byte-identical), and the router byte-identical to the tested one. Not yet written.
+- Still open:
+  - The ofono hang from the first test (a pending SCO connect, `InProgress` until the earbuds reconnect) has not come back. If it does, `stone-bt-call-debug.sh` captures the HCI trace.
+  - Only the Moondrop Nekocake was tested; a headset without wideband speech should negotiate CVSD and get `KHZ_8`.
+- Unrelated observation: after this boot hciconfig shows the adapter address byte-reversed (`redacted`, earlier `redacted`); the paired earbuds still connect.
+
+### In-call volume (2026-11-11)
+
+User report: during an earpiece call, the volume keys change the speaker (media) volume and not the call.
+
+What happens:
+- **The keys.** Lomiri's volume keys go to ayatana-indicator-sound (`24.5.3`, UBports patch `0001-phone-volume-step.patch`). It controls the `phone` media role (through module-stream-restore) whenever a sink input with `media.role=phone` exists, corked or not. Otherwise it controls the playing stream, or the `alert`/`multimedia` role.
+  - On Halium devices that phone stream is pulseaudio-modules-droid's voice-call stream, and its volume goes to the audio HAL.
+  - Our calls bypass the HAL (`docs/roadmap-hardware.md` item 6), so there was no phone stream, and the keys changed media.
+- **The DSP volume cannot be used.** The HAL's way in is `Voice Rx Gain` → `voc_set_rx_vol_step()` → `VSS_IVOLUME_CMD_SET_STEP`, which needs the ACDB volume calibration table. Without ACDB the kernel logs, at every call start:
+  - `voice_send_cvp_register_vol_cal_cmd: Voice_get_cal failed for cal 3`;
+  - `voice_send_vol_step_cmd: DSP returned error[ADSP_EFAILED]`;
+  - `voice volume failed`.
+
+  So a volume step is rejected.
+- **The codec is the place.** The downlink reaches the output through the codec's RX interpolators, which have plain digital gains (0–124, 1 dB per step, 84 = 0 dB, all at 84). The UCM profile defines no hardware volume (PulseAudio scales in software), so these controls are free to use:
+  - Earpiece: `RX INT0` (`RX_RX0 Digital Volume`);
+  - Speaker: `RX INT2` (`RX_RX2`);
+  - 3.5 mm headphones: `RX INT0` and `INT1`.
+
+  USB and Bluetooth calls leave the DSP for the device without passing the codec.
+
+Fix: `usr/lib/stone/call_volume.py`, used by `call-audio-router.py`.
+- **The stream.** While ofono has a call in `dialing`/`alerting`/`active`/`held`, it keeps a **corked** playback stream with `media.role=phone` ("Call volume", 8 kHz mono, created with `PA_STREAM_START_CORKED`).
+  - Corked, it never plays: it neither wakes the sink nor triggers `module-role-cork`, so media behaves during calls as before.
+  - libpulse runs through ctypes on the router's GLib loop (`libpulse-mainloop-glib`), subscribed to sink-input events.
+- **The mapping.** The stream's volume (the indicator's slider *f* = volume / `PA_VOLUME_NORM`) sets the active route's codec gain:
+  - -15 dB (`f` = 0.562, the phone role default in `touch-stream-restore.table`) = 0 dB, the old fixed level;
+  - below that, PulseAudio's cubic curve relative to the default, down to -40 dB; 0 or muted = silent (control value 0);
+  - above it, linear up to `~/.config/stone/call-volume-max-db` (default +6 dB).
+
+  With the indicator's 1/6 steps, starting from the default: up +2, +5, +6 dB; down -9, -23, -40 dB, then silent.
+- **The route.** On a route change the old route's controls go back to 84, and the new route gets the gain. At the end of the call everything goes back to 84.
+- **The saved volume.** The phone role volume saved on the test phone was 23 % (-38 dB, origin unknown). So the first time the stream appears, the role is set once to the default and `~/.config/stone/call-volume-initialized` is written; after that the user's choice persists from call to call.
+
+Checked without a call (as phablet):
+- the stream appears; the role volume at 90 % gave `RX_RX0` 89 (+5 dB), at 30 % 68 (-16 dB);
+- a route switch to the speaker moved the gain to `RX_RX2`;
+- disabling it removed the stream and put both controls back to 84.
+
+Live install: `tools/phone-debug/stone-call-volume-install.sh` (not during a call).
+
+Live test (2026-11-11, user: "all tests passed"). Router log of the test call:
+- Earpiece: the keys stepped `RX_RX0` through 0 (silent), 52 (-32 dB), 70 (-14 dB), 81 (-3 dB), 85 (+1 dB), 88 (+4 dB) and 90 (+6 dB), and back. The indicator moves the slider on its 1/6 grid (0, 17, 33, 50, 67, 83, 100 %).
+- Speaker: after the switch the gain moved to `RX_RX2` and followed the keys there.
+- After the call both controls were 84 again, and media volume behaved as before.
+
+After the test, the "PulseAudio connection closed" log line is printed only for an unexpected disconnect, not for the router's own close at the end of a call. That is the only change from the tested file.
+
+Image `f4a9cf05483cc630e520d4e3581651c0a1acd134a5d0200807b543a4d6152e6e`: the `#15` kernel (byte-identical), plus `call_volume.py` and the router. Not yet written.
+
+Still open: USB and Bluetooth calls keep the device's own volume (the keys still change the phone role, which has no effect there). For Bluetooth, the matching control would be the headset speaker volume over HFP (`+VGS`); not done.
 
 ## 10. GPU and graphics APIs
 

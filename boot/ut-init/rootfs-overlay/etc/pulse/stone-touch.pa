@@ -76,7 +76,7 @@ load-module module-bluetooth-policy
 .endif
 
 .ifexists module-bluez5-discover.so
-load-module module-bluez5-discover profile=a2dp_sink headset=auto enable_msbc=false sco_sink=sink.fake.sco sco_source=source.fake.sco
+load-module module-bluez5-discover profile=a2dp_sink headset=auto enable_msbc=true sco_sink=sink.fake.sco sco_source=source.fake.sco
 .endif
 
 ### Load several protocols

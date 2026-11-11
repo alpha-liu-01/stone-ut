@@ -40,6 +40,8 @@ import dbus
 import dbus.mainloop.glib
 from gi.repository import GLib
 
+import call_volume
+
 CTL = os.environ.get("STONE_CALL_AUDIO", "/usr/lib/stone/call-audio.sh")
 SINK = "sink.primary"
 SOURCE = "source.primary"
@@ -70,6 +72,14 @@ FALLBACK_SINK = "sink.speaker"
 MAIN_CARD = "hw:holiqrdsku1sndc"
 UCM_ENV = dict(os.environ, ALSA_CONFIG_UCM2=os.environ.get(
     "ALSA_CONFIG_UCM2", "/usr/share/stone/ucm2"))
+# Wideband (mSBC) Bluetooth calls: with enable_msbc=true ofono negotiates mSBC
+# with headsets that support it, and the kernel (patch 0009) sets the link up
+# with the controller encoding mSBC from 16 kHz PCM on the SLIMbus path. It
+# counts those links here; SLIMBUS_7 then has to run at 16 kHz instead of the
+# UCM default of 8 kHz (CVSD). The link comes up once source.fake.sco is open.
+MSBC_ACTIVE = "/sys/module/bluetooth/parameters/sco_offload_msbc_active"
+BT_RATE_CONTROLS = ("BT SampleRate", "BT SampleRate RX", "BT SampleRate TX")
+SCO_LINK_WAIT_S = 3.0
 
 
 def log(*args):
@@ -93,6 +103,7 @@ class Router:
         self.call_since = None
         self.session = False      # voice session running
         self.session_port = None  # port it was started on
+        self.session_sub = None   # subscription (1 = SIM 1, 2 = SIM 2) it runs for
         self.muted = False
         self.recorded = False
         self.sco = None           # process holding source.fake.sco open
@@ -110,6 +121,12 @@ class Router:
         self.defaults_checked = False
         self.had_calls = False
         self.post_call_until = 0.0  # see prefer_usb_defaults()
+        # In-call volume: phone role stream -> codec gain (call_volume.py).
+        try:
+            self.call_volume = call_volume.CallVolume(log)
+        except OSError as e:
+            log("call volume unavailable: %s" % e)
+            self.call_volume = None
 
         self.bus.add_signal_receiver(
             self.on_call_added, "CallAdded", "org.ofono.VoiceCallManager",
@@ -367,29 +384,79 @@ class Router:
                 subprocess.run(["pactl", "suspend-" + kind, name, "0"])
         self.usb_held = target
 
+    def bt_rate(self):
+        """Set SLIMBUS_7 to 16 kHz for an mSBC link, 8 kHz otherwise."""
+        deadline = time.monotonic() + SCO_LINK_WAIT_S
+        link = False
+        while True:
+            try:
+                out = subprocess.run(["hcitool", "con"], capture_output=True,
+                                     text=True, timeout=2).stdout
+                link = any(l.split()[1:2] in (["SCO"], ["eSCO"])
+                           for l in out.splitlines() if l.strip().startswith(("<", ">")))
+            except (OSError, subprocess.SubprocessError, IndexError):
+                pass
+            if link or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
+        try:
+            msbc = int(open(MSBC_ACTIVE).read().strip()) > 0
+        except (OSError, ValueError):
+            msbc = False
+        rate = "KHZ_16" if msbc else "KHZ_8"
+        # The rate only applies when the SLIMBUS_7 back end starts. On an
+        # incoming call telephony-service moves the route to Bluetooth while
+        # the ringtone plays, so PulseAudio's media stream (MultiMedia5 ->
+        # SLIMBUS_7_RX) has already started the back end at the UCM default
+        # of 8 kHz; the voice session would join it there and an mSBC link
+        # gets silence. Close PulseAudio's side first (suspend), set the
+        # rate, then let it reopen: everything after starts at this rate.
+        subprocess.run(["pactl", "suspend-sink", SINK, "1"])
+        subprocess.run(["pactl", "suspend-source", SOURCE, "1"])
+        for name in BT_RATE_CONTROLS:
+            subprocess.run(["amixer", "-q", "-D", MAIN_CARD, "cset", "name=%s" % name, rate])
+        subprocess.run(["pactl", "suspend-sink", SINK, "0"])
+        subprocess.run(["pactl", "suspend-source", SOURCE, "0"])
+        log("bluetooth: %s link, SLIMBUS_7 %s" % (
+            "mSBC (wideband)" if msbc else ("CVSD" if link else "no SCO"), rate))
+
+    def voice_sub(self):
+        """Subscription of the call that needs the voice path.
+
+        Each SIM has its own DSP voice session: SIM 1 (ofono /ril_0)
+        VoiceMMode1, SIM 2 (/ril_1) VoiceMMode2. The modem uses the one of
+        the SIM the call is on; the other session stays silent."""
+        subs = {2 if path.startswith("/ril_1/") else 1
+                for path, state in self.calls.items() if state in VOICE_STATES}
+        return 2 if subs == {2} else 1
+
     def start(self):
+        if self.port == BT_PORT:
+            self.bt_rate()
         if self.port is None:
             # No PulseAudio sink: apply the same UCM profile directly so a
             # call still has audio (earpiece).
             log("no %s; enabling UCM Earpiece directly" % SINK)
             subprocess.run(["alsaucm", "-c", MAIN_CARD, "set", "_verb", "Voice Call",
                             "set", "_enadev", "Earpiece"], env=UCM_ENV)
-        subprocess.run([CTL, "on"] + (["muted"] if self.src_mute else []))
+        sub = self.voice_sub()
+        subprocess.run([CTL, "on"] + (["muted"] if self.src_mute else []) +
+                       (["sub2"] if sub == 2 else []))
         try:
             gain = open(GAIN_FILE).read().strip()
         except OSError:
             gain = ""
         if gain:
             subprocess.run([CTL, "gain", gain])
-        log("call audio on: %s%s%s" % (self.port, ", muted" if self.src_mute else "",
+        log("call audio on: %s, SIM %d%s%s" % (self.port, sub, ", muted" if self.src_mute else "",
                                        ", gain +%s dB" % gain if gain else ""))
-        self.session, self.session_port = True, self.port
+        self.session, self.session_port, self.session_sub = True, self.port, sub
         self.muted = self.src_mute
 
     def stop(self):
         subprocess.run([CTL, "off"])
         log("call audio off")
-        self.session, self.session_port = False, None
+        self.session, self.session_port, self.session_sub = False, None, None
         self.recorded = False
 
     def evaluate(self):
@@ -417,6 +484,8 @@ class Router:
         if not self.calls and self.leave_usb_port():
             return False  # its port event brings us back
 
+        if self.call_volume:
+            self.call_volume.set(want, self.port)
         if not want:
             if self.call_since is not None:
                 log("calls: %s" % (" ".join(states) or "none"))
@@ -428,7 +497,8 @@ class Router:
             self.call_since = now
             log("calls: %s" % " ".join(states))
         wait = max(self.call_since, self.port_since) + SETTLE - now
-        if not self.session or self.session_port != self.port:
+        if not self.session or self.session_port != self.port or \
+                self.session_sub != self.voice_sub():
             if wait > 0:
                 self.eval_timer = GLib.timeout_add(int(wait * 1000) + 10,
                                                    self.evaluate)
@@ -447,6 +517,8 @@ class Router:
         return False
 
     def shutdown(self):
+        if self.call_volume:
+            self.call_volume.shutdown()
         if self.session:
             self.stop()
         self.hold_sco(False)

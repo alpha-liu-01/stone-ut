@@ -1,0 +1,136 @@
+#!/usr/bin/python3 -I
+"""Send infrared remote-control codes through the IR emitter (stone).
+
+Talks to the kernel's LIRC device (/dev/lirc0, the ir-spi driver) directly,
+in the standard pulse mode: set the carrier and duty cycle, then write the
+on/off durations in microseconds. (The vendor's consumerir HAL cannot be
+used: it drives a Xiaomi variant of the driver that takes a pre-modulated
+bitstream and a "length" through LIRC_SET_SEND_MODE, which the mainline
+driver rejects. See docs/roadmap-hardware-2.md, item 9.) Needs the video
+group (phablet has it).
+
+  stone-ir info                         what the emitter supports
+  stone-ir samsung ADDR CMD [-r N]      Samsung32, e.g. "samsung 0x07 0x02" =
+                                        TV power (the well-known E0E040BF)
+  stone-ir samsung-tv KEY [-r N]        power vol+ vol- mute ch+ ch- source menu
+                                        ok up down left right back home
+  stone-ir nec ADDR CMD [-r N]          NEC (8-bit address) or NEC extended
+                                        (16-bit address), as used by many TVs
+  stone-ir raw FREQ D1 D2 D3 ... [-r N] raw pattern (microseconds, on first)
+
+-r N repeats the frame N times (default 1, 40 ms apart).
+"""
+import fcntl
+import os
+import struct
+import sys
+import time
+
+DEVICE = "/dev/lirc0"
+LIRC_GET_FEATURES = 0x80046900
+LIRC_SET_SEND_CARRIER = 0x40046913
+LIRC_SET_SEND_DUTY_CYCLE = 0x40046915
+LIRC_CAN_SEND_PULSE = 0x00000002
+LIRC_CAN_SET_SEND_CARRIER = 0x00000100
+LIRC_CAN_SET_SEND_DUTY_CYCLE = 0x00000200
+DUTY_CYCLE = 33                      # % (typical for consumer IR remotes)
+
+# Samsung TV remote (address 0x07), command codes.
+SAMSUNG_TV = {
+    "power": 0x02, "source": 0x01, "vol+": 0x07, "vol-": 0x0B, "mute": 0x0F,
+    "ch+": 0x12, "ch-": 0x10, "menu": 0x1A, "ok": 0x68, "up": 0x60,
+    "down": 0x61, "left": 0x65, "right": 0x62, "back": 0x58, "home": 0x79,
+}
+
+
+def open_lirc():
+    try:
+        return os.open(DEVICE, os.O_RDWR)
+    except OSError as e:
+        raise SystemExit("%s: %s" % (DEVICE, e.strerror))
+
+
+def features(fd):
+    buf = bytearray(4)
+    fcntl.ioctl(fd, LIRC_GET_FEATURES, buf)
+    return struct.unpack("<I", buf)[0]
+
+
+def pulse_distance(leader_on, leader_off, data, nbits, one_off=1690, zero_off=560, mark=560):
+    """LSB-first pulse-distance code (NEC/Samsung family)."""
+    p = [leader_on, leader_off]
+    for i in range(nbits):
+        p += [mark, one_off if (data >> i) & 1 else zero_off]
+    p.append(mark)
+    return p
+
+
+def samsung(addr, cmd):
+    data = (addr & 0xFF) | (addr & 0xFF) << 8 | (cmd & 0xFF) << 16 | (~cmd & 0xFF) << 24
+    return pulse_distance(4500, 4500, data, 32)
+
+
+def nec(addr, cmd):
+    if addr > 0xFF:                       # extended: 16-bit address
+        a = addr & 0xFFFF
+    else:
+        a = (addr & 0xFF) | (~addr & 0xFF) << 8
+    data = a | (cmd & 0xFF) << 16 | (~cmd & 0xFF) << 24
+    return pulse_distance(9000, 4500, data, 32, one_off=1687, zero_off=562, mark=562)
+
+
+def send(freq, pattern, repeat):
+    if len(pattern) % 2 == 0:
+        raise SystemExit("a pattern must start and end with a pulse (odd count)")
+    fd = open_lirc()
+    try:
+        feat = features(fd)
+        if not feat & LIRC_CAN_SEND_PULSE:
+            raise SystemExit("%s cannot send pulses (features 0x%x)" % (DEVICE, feat))
+        if feat & LIRC_CAN_SET_SEND_CARRIER:
+            fcntl.ioctl(fd, LIRC_SET_SEND_CARRIER, struct.pack("<I", freq))
+        if feat & LIRC_CAN_SET_SEND_DUTY_CYCLE:
+            fcntl.ioctl(fd, LIRC_SET_SEND_DUTY_CYCLE, struct.pack("<I", DUTY_CYCLE))
+        data = struct.pack("<%dI" % len(pattern), *pattern)
+        for i in range(repeat):
+            if i:
+                time.sleep(0.040)
+            n = os.write(fd, data)
+            if n != len(data):
+                raise SystemExit("short write: %d of %d bytes" % (n, len(data)))
+    finally:
+        os.close(fd)
+    print("sent %d frame(s): %d kHz, %d durations, %.1f ms each" % (
+        repeat, freq // 1000, len(pattern), sum(pattern) / 1000.0))
+
+
+def main(argv):
+    repeat = 1
+    if "-r" in argv:
+        i = argv.index("-r")
+        repeat = int(argv[i + 1])
+        del argv[i:i + 2]
+    if not argv:
+        raise SystemExit(__doc__)
+    what, args = argv[0], argv[1:]
+    if what == "info":
+        fd = open_lirc()
+        feat = features(fd)
+        os.close(fd)
+        print("%s: features 0x%x (send pulses: %s, set carrier: %s, set duty cycle: %s)" % (
+            DEVICE, feat, bool(feat & LIRC_CAN_SEND_PULSE), bool(feat & LIRC_CAN_SET_SEND_CARRIER),
+            bool(feat & LIRC_CAN_SET_SEND_DUTY_CYCLE)))
+    elif what == "samsung" and len(args) == 2:
+        send(38000, samsung(int(args[0], 0), int(args[1], 0)), repeat)
+    elif what == "samsung-tv" and len(args) == 1 and args[0] in SAMSUNG_TV:
+        send(38000, samsung(0x07, SAMSUNG_TV[args[0]]), repeat)
+    elif what == "nec" and len(args) == 2:
+        send(38000, nec(int(args[0], 0), int(args[1], 0)), repeat)
+    elif what == "raw" and len(args) >= 2:
+        send(int(args[0]), [int(x) for x in args[1:]], repeat)
+    else:
+        raise SystemExit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

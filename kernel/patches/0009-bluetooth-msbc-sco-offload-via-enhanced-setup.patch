@@ -1,0 +1,298 @@
+diff --git a/include/net/bluetooth/hci.h b/include/net/bluetooth/hci.h
+index 5bc1e30de..992dc4d2c 100644
+--- a/include/net/bluetooth/hci.h
++++ b/include/net/bluetooth/hci.h
+@@ -710,6 +710,60 @@ struct hci_cp_accept_sync_conn_req {
+ 	__le16   pkt_type;
+ } __packed;
+ 
++/* Coding formats (Core 5.x Assigned Numbers) */
++#define HCI_CODING_FORMAT_CVSD		0x02
++#define HCI_CODING_FORMAT_TRANSPARENT	0x03
++#define HCI_CODING_FORMAT_LINEAR_PCM	0x04
++#define HCI_CODING_FORMAT_MSBC		0x05
++#define HCI_PCM_DATA_FORMAT_2_COMP	0x02
++#define HCI_SCO_DATA_PATH_HCI		0x00
++#define HCI_SCO_DATA_PATH_PCM		0x01
++
++struct hci_coding_format {
++	__u8	id;
++	__le16	cid;
++	__le16	vid;
++} __packed;
++
++/* The parameter block shared by Enhanced Setup and Enhanced Accept */
++struct hci_enhanced_sync_conn_params {
++	__le32	tx_bandwidth;
++	__le32	rx_bandwidth;
++	struct	hci_coding_format tx_coding_format;
++	struct	hci_coding_format rx_coding_format;
++	__le16	tx_codec_frame_size;
++	__le16	rx_codec_frame_size;
++	__le32	in_bandwidth;
++	__le32	out_bandwidth;
++	struct	hci_coding_format in_coding_format;
++	struct	hci_coding_format out_coding_format;
++	__le16	in_coded_data_size;
++	__le16	out_coded_data_size;
++	__u8	in_pcm_data_format;
++	__u8	out_pcm_data_format;
++	__u8	in_pcm_sample_payload_msb_pos;
++	__u8	out_pcm_sample_payload_msb_pos;
++	__u8	in_data_path;
++	__u8	out_data_path;
++	__u8	in_transport_unit_size;
++	__u8	out_transport_unit_size;
++	__le16	max_latency;
++	__le16	pkt_type;
++	__u8	retrans_effort;
++} __packed;
++
++#define HCI_OP_ENHANCED_SETUP_SYNC_CONN		0x043d
++struct hci_cp_enhanced_setup_sync_conn {
++	__le16	handle;
++	struct	hci_enhanced_sync_conn_params p;
++} __packed;
++
++#define HCI_OP_ENHANCED_ACCEPT_SYNC_CONN_REQ	0x043e
++struct hci_cp_enhanced_accept_sync_conn_req {
++	bdaddr_t bdaddr;
++	struct	hci_enhanced_sync_conn_params p;
++} __packed;
++
+ #define HCI_OP_REJECT_SYNC_CONN_REQ	0x042a
+ struct hci_cp_reject_sync_conn_req {
+ 	bdaddr_t bdaddr;
+diff --git a/include/net/bluetooth/hci_core.h b/include/net/bluetooth/hci_core.h
+index 4adb1d70b..f0f24cad0 100644
+--- a/include/net/bluetooth/hci_core.h
++++ b/include/net/bluetooth/hci_core.h
+@@ -694,6 +694,8 @@ enum {
+ 	HCI_CONN_NEW_LINK_KEY,
+ 	HCI_CONN_SCANNING,
+ 	HCI_CONN_AUTH_FAILURE,
++	HCI_CONN_OFFLOAD_MSBC,		/* set up with controller mSBC codec */
++	HCI_CONN_OFFLOAD_MSBC_ACTIVE,	/* ... and connected (counted) */
+ };
+ 
+ static inline bool hci_conn_ssp_enabled(struct hci_conn *conn)
+@@ -909,6 +911,12 @@ static inline struct hci_conn *hci_lookup_le_connect(struct hci_dev *hdev)
+ 
+ int hci_disconnect(struct hci_conn *conn, __u8 reason);
+ bool hci_setup_sync(struct hci_conn *conn, __u16 handle);
++bool hci_sco_offload_transp(struct hci_dev *hdev);
++void hci_offload_msbc_link_up(struct hci_conn *conn);
++void hci_offload_msbc_link_down(struct hci_conn *conn);
++void hci_fill_offload_msbc_params(struct hci_enhanced_sync_conn_params *p,
++				  u16 pkt_type, u16 max_latency,
++				  u8 retrans_effort);
+ void hci_sco_setup(struct hci_conn *conn, __u8 status);
+ 
+ struct hci_conn *hci_conn_add(struct hci_dev *hdev, int type, bdaddr_t *dst,
+diff --git a/net/bluetooth/hci_conn.c b/net/bluetooth/hci_conn.c
+index d55973cb5..ca8ff7065 100644
+--- a/net/bluetooth/hci_conn.c
++++ b/net/bluetooth/hci_conn.c
+@@ -59,6 +59,82 @@ static const struct sco_param esco_param_msbc[] = {
+ 	{ EDR_ESCO_MASK | ESCO_EV3,   0x0008,	0x02 }, /* T1 */
+ };
+ 
++/* Transparent (mSBC) SCO links on controllers whose SCO data path is PCM
++ * (audio offload, e.g. Qualcomm chips behind an Android BT HAL with the
++ * SCO audio on SLIMbus/PCM): with the legacy Setup Synchronous Connection
++ * the controller passes the PCM samples through as if they were mSBC
++ * frames. Use Enhanced Setup/Accept instead and let the controller encode
++ * mSBC from 16 kHz linear PCM on its PCM data path, as Android does
++ * (esco_parameters.cc, mSBC T2/T1 with offload). There is no HCI data path
++ * for transparent SCO on such devices anyway.
++ */
++static bool sco_offload_msbc = true;
++module_param(sco_offload_msbc, bool, 0644);
++MODULE_PARM_DESC(sco_offload_msbc,
++		 "Set up transparent (mSBC) SCO links with controller mSBC encoding on the PCM data path");
++
++/* Connected offloaded mSBC links, for userspace that has to configure the
++ * PCM side (e.g. the SLIMbus sample rate: 16 kHz for mSBC, 8 kHz for CVSD).
++ * Changed under hdev->lock.
++ */
++static int sco_offload_msbc_active;
++module_param(sco_offload_msbc_active, int, 0444);
++MODULE_PARM_DESC(sco_offload_msbc_active,
++		 "Number of connected SCO links with controller mSBC encoding");
++
++void hci_offload_msbc_link_up(struct hci_conn *conn)
++{
++	if (test_bit(HCI_CONN_OFFLOAD_MSBC, &conn->flags) &&
++	    !test_and_set_bit(HCI_CONN_OFFLOAD_MSBC_ACTIVE, &conn->flags)) {
++		sco_offload_msbc_active++;
++		bt_dev_info(conn->hdev, "mSBC: offloaded link up (%d active)",
++			    sco_offload_msbc_active);
++	}
++}
++
++void hci_offload_msbc_link_down(struct hci_conn *conn)
++{
++	if (test_and_clear_bit(HCI_CONN_OFFLOAD_MSBC_ACTIVE, &conn->flags) &&
++	    sco_offload_msbc_active > 0)
++		sco_offload_msbc_active--;
++}
++
++bool hci_sco_offload_transp(struct hci_dev *hdev)
++{
++	/* Enhanced Setup Synchronous Connection: octet 29, bit 3 */
++	return sco_offload_msbc && (hdev->commands[29] & 0x08);
++}
++
++void hci_fill_offload_msbc_params(struct hci_enhanced_sync_conn_params *p,
++				  u16 pkt_type, u16 max_latency,
++				  u8 retrans_effort)
++{
++	/* Sizes from the Core specification (Vol 4, Part E, 7.1.45/46) */
++	BUILD_BUG_ON(sizeof(struct hci_cp_enhanced_setup_sync_conn) != 59);
++	BUILD_BUG_ON(sizeof(struct hci_cp_enhanced_accept_sync_conn_req) != 63);
++
++	memset(p, 0, sizeof(*p));
++	p->tx_bandwidth = cpu_to_le32(0x00001f40);	/* 64 kbit/s on air */
++	p->rx_bandwidth = cpu_to_le32(0x00001f40);
++	p->tx_coding_format.id = HCI_CODING_FORMAT_MSBC;
++	p->rx_coding_format.id = HCI_CODING_FORMAT_MSBC;
++	p->tx_codec_frame_size = cpu_to_le16(60);
++	p->rx_codec_frame_size = cpu_to_le16(60);
++	p->in_bandwidth = cpu_to_le32(0x00007d00);	/* 16 kHz, 16 bit */
++	p->out_bandwidth = cpu_to_le32(0x00007d00);
++	p->in_coding_format.id = HCI_CODING_FORMAT_LINEAR_PCM;
++	p->out_coding_format.id = HCI_CODING_FORMAT_LINEAR_PCM;
++	p->in_coded_data_size = cpu_to_le16(16);
++	p->out_coded_data_size = cpu_to_le16(16);
++	p->in_pcm_data_format = HCI_PCM_DATA_FORMAT_2_COMP;
++	p->out_pcm_data_format = HCI_PCM_DATA_FORMAT_2_COMP;
++	p->in_data_path = HCI_SCO_DATA_PATH_PCM;
++	p->out_data_path = HCI_SCO_DATA_PATH_PCM;
++	p->max_latency = cpu_to_le16(max_latency);
++	p->pkt_type = cpu_to_le16(pkt_type);
++	p->retrans_effort = retrans_effort;
++}
++
+ /* This function requires the caller holds hdev->lock */
+ static void hci_connect_le_scan_cleanup(struct hci_conn *conn)
+ {
+@@ -306,6 +382,21 @@ bool hci_setup_sync(struct hci_conn *conn, __u16 handle)
+ 		return false;
+ 	}
+ 
++	if ((conn->setting & SCO_AIRMODE_MASK) == SCO_AIRMODE_TRANSP &&
++	    hci_sco_offload_transp(hdev)) {
++		struct hci_cp_enhanced_setup_sync_conn ecp;
++
++		ecp.handle = cpu_to_le16(handle);
++		hci_fill_offload_msbc_params(&ecp.p, param->pkt_type,
++					     param->max_latency,
++					     param->retrans_effort);
++		set_bit(HCI_CONN_OFFLOAD_MSBC, &conn->flags);
++		bt_dev_info(hdev, "mSBC: enhanced setup, controller codec, PCM path (attempt %d)",
++			    conn->attempt);
++		return hci_send_cmd(hdev, HCI_OP_ENHANCED_SETUP_SYNC_CONN,
++				    sizeof(ecp), &ecp) >= 0;
++	}
++
+ 	cp.retrans_effort = param->retrans_effort;
+ 	cp.pkt_type = __cpu_to_le16(param->pkt_type);
+ 	cp.max_latency = __cpu_to_le16(param->max_latency);
+@@ -577,6 +668,8 @@ int hci_conn_del(struct hci_conn *conn)
+ 	cancel_delayed_work_sync(&conn->auto_accept_work);
+ 	cancel_delayed_work_sync(&conn->idle_work);
+ 
++	hci_offload_msbc_link_down(conn);
++
+ 	if (conn->type == ACL_LINK) {
+ 		struct hci_conn *sco = conn->link;
+ 		if (sco)
+diff --git a/net/bluetooth/hci_event.c b/net/bluetooth/hci_event.c
+index c00872f0d..c31b8a2df 100644
+--- a/net/bluetooth/hci_event.c
++++ b/net/bluetooth/hci_event.c
+@@ -2154,6 +2154,41 @@ static void hci_cs_setup_sync_conn(struct hci_dev *hdev, __u8 status)
+ 	hci_dev_unlock(hdev);
+ }
+ 
++static void hci_cs_enhanced_setup_sync_conn(struct hci_dev *hdev, __u8 status)
++{
++	struct hci_cp_enhanced_setup_sync_conn *cp;
++	struct hci_conn *acl, *sco;
++	__u16 handle;
++
++	BT_DBG("%s status 0x%2.2x", hdev->name, status);
++
++	if (!status)
++		return;
++
++	cp = hci_sent_cmd_data(hdev, HCI_OP_ENHANCED_SETUP_SYNC_CONN);
++	if (!cp)
++		return;
++
++	handle = __le16_to_cpu(cp->handle);
++
++	bt_dev_err(hdev, "enhanced setup sync conn failed: status 0x%2.2x", status);
++
++	hci_dev_lock(hdev);
++
++	acl = hci_conn_hash_lookup_handle(hdev, handle);
++	if (acl) {
++		sco = acl->link;
++		if (sco) {
++			sco->state = BT_CLOSED;
++
++			hci_connect_cfm(sco, status);
++			hci_conn_del(sco);
++		}
++	}
++
++	hci_dev_unlock(hdev);
++}
++
+ static void hci_cs_sniff_mode(struct hci_dev *hdev, __u8 status)
+ {
+ 	struct hci_cp_sniff_mode *cp;
+@@ -3560,6 +3595,10 @@ static void hci_cmd_status_evt(struct hci_dev *hdev, struct sk_buff *skb,
+ 		hci_cs_setup_sync_conn(hdev, ev->status);
+ 		break;
+ 
++	case HCI_OP_ENHANCED_SETUP_SYNC_CONN:
++		hci_cs_enhanced_setup_sync_conn(hdev, ev->status);
++		break;
++
+ 	case HCI_OP_SNIFF_MODE:
+ 		hci_cs_sniff_mode(hdev, ev->status);
+ 		break;
+@@ -4272,6 +4311,8 @@ static void hci_sync_conn_complete_evt(struct hci_dev *hdev,
+ 		conn->state  = BT_CONNECTED;
+ 		conn->type   = ev->link_type;
+ 
++		hci_offload_msbc_link_up(conn);
++
+ 		hci_debugfs_create_conn(conn);
+ 		hci_conn_add_sysfs(conn);
+ 		break;
+diff --git a/net/bluetooth/sco.c b/net/bluetooth/sco.c
+index 4c81883ba..83f9a405c 100644
+--- a/net/bluetooth/sco.c
++++ b/net/bluetooth/sco.c
+@@ -757,6 +757,18 @@ static void sco_conn_defer_accept(struct hci_conn *conn, u16 setting)
+ 		cp.role = 0x00; /* Ignored */
+ 
+ 		hci_send_cmd(hdev, HCI_OP_ACCEPT_CONN_REQ, sizeof(cp), &cp);
++	} else if ((setting & SCO_AIRMODE_MASK) == SCO_AIRMODE_TRANSP &&
++		   hci_sco_offload_transp(hdev)) {
++		struct hci_cp_enhanced_accept_sync_conn_req cp;
++
++		bacpy(&cp.bdaddr, &conn->dst);
++		hci_fill_offload_msbc_params(&cp.p, conn->pkt_type,
++					     (conn->pkt_type & ESCO_2EV3) ?
++					     0x0008 : 0x000D, 0x02);
++		set_bit(HCI_CONN_OFFLOAD_MSBC, &conn->flags);
++		bt_dev_info(hdev, "mSBC: enhanced accept, controller codec, PCM path");
++		hci_send_cmd(hdev, HCI_OP_ENHANCED_ACCEPT_SYNC_CONN_REQ,
++			     sizeof(cp), &cp);
+ 	} else {
+ 		struct hci_cp_accept_sync_conn_req cp;
+ 
