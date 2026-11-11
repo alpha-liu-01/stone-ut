@@ -1,7 +1,7 @@
 # Hardware, after the display is up
 
 
-The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is `fc166f50…` (kernel `#12`: items 5 and 6 complete, including 3.5 mm and USB headsets; camera patch 0005), written on 2026-11-10; the last fully confirmed image before it is `f054cb90…` (kernel `#11`). The image to flash next is `e1554638…` (kernel `#13`, uneven key clicks on the speaker, item 3); `71ac8a52…` (camera fixes) was written and confirmed, kept as `out/halium14/boot-ut-71ac8a52.img`. Earlier images are kept in `out/halium14/` (`boot-ut-71ac8a52.img`, `boot-ut-fc166f50.img`, `boot-ut-f054cb90.img`, `boot-ut-c286b311.img`, `boot-ut-819deb43.img`, `boot-ut-0fe04e7f.img`, `boot-ut-c1d90d44.img` with kernel `#9`, `boot-ut-data.img`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
+The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user confirmed Ubuntu Touch had entered Lomiri, and that display, touch, GPU, brightness, charge detection, and vibration all work. This document only covers hardware that is not working yet. Do not reflash `vendor_boot`, `dtbo`, `vbmeta`, or `super`. `boot_b` is `e1554638…` (kernel `#13`), written and confirmed on 2026-11-10: items 5 and 6 complete (including 3.5 mm and USB headsets), camera (item 7), and even key clicks on the speaker (item 3, kernel patch 0006). Built and not yet written: `boot-ut.img` `15c0d147ac13b42ad26862414086463929dc233fda74be8e67c4d5f066b4e80f` (kernel `#13`, unchanged; adds `stone-mms-route.service`, item 5). It changes nothing on a phone that already has the live install, so it can be written whenever convenient. Earlier images are kept in `out/halium14/` (`boot-ut-e1554638.img`, `boot-ut-71ac8a52.img`, `boot-ut-fc166f50.img`, `boot-ut-f054cb90.img`, `boot-ut-c286b311.img`, `boot-ut-819deb43.img`, `boot-ut-0fe04e7f.img`, `boot-ut-c1d90d44.img` with kernel `#9`, `boot-ut-data.img`). It has no passwordless sudo, and it does not return to fastboot by itself. Anything that needs root has to be run by the user with `adb shell -t 'sudo …'`.
 
 `/etc/os-release` is Ubuntu 24.04.5 LTS. The root filesystem comes from `ubuntu-touch-android9plus-rootfs-arm64.tar.gz` on the 24.04-2.x channel. adb is up, serial `stone`. Once mobile data was up on 2026-11-10, the phone clock went from 1970 to the correct time.
 
@@ -13,7 +13,7 @@ The goal of `docs/roadmap-halium14.md` has been reached. On 2026-11-09 the user 
 - adb.
 - Speaker output (item 3).
 - Wi-Fi (item 4).
-- SIM, both IMEIs, mobile data (5G/NR), MMS, voice calls with audio in both directions (3G and IMS) (item 5).
+- SIM, both IMEIs, mobile data (5G/NR), MMS (pictures in both directions, on Wi-Fi too), voice calls with audio in both directions (3G and IMS) (item 5).
 - Bluetooth: pairing, A2DP music, and calls on the earbuds (item 6). Calls on earpiece, speakerphone or Bluetooth, chosen in the dialer.
 - Camera: rear (main sensor) and front preview, photos and video recording (item 7; image `71ac8a52…` pending a clean-boot check).
 - Wired headsets: 3.5 mm (headphone jack detection, headset mic) and USB (media through the host driver; calls through the DSP's USB offload, with the headset mic) (item 6, "Wired headsets").
@@ -147,8 +147,8 @@ The workaround lives in the user directory and does not need another boot image.
 - How it was found: the phone's mic could not measure it (its gain and delay change between runs, and switching the speaker path on puts a DC burst into it); the sink monitor did, and matched what the user heard run by run. Listening test (`tools/phone-debug/keyclick-test.sh`, variants A to D) put the trigger on a second stream being active (B), and the monitor showed the cut clicks.
 - Live test: `snd_pcm_rewind()`/`snd_pcm_rewindable()` stubbed to 0 in PulseAudio (`LD_PRELOAD`): all clicks whole and equal (-23.0 to -23.2 dBFS) in four runs of variant B.
 - Fix (`kernel/patches/0006-alsa-no-rewinds-for-msm-dsp-playback.patch`, kernel `#13 SMP PREEMPT Tue Nov 10 21:06:58 EST 2026`): backport of Linux 5.17's `SNDRV_PCM_INFO_NO_REWINDS` (bit `0x20000000`; `rewind_appl_ptr()` returns 0 when set) and the flag on `msm_pcm_hardware_playback` in `msm-pcm-q6-v2.c` (all ADSP MultiMedia playback front ends, MultiMedia5 included). PulseAudio then gets "rewound 0 frames" and queues new data behind what is already buffered (at most 40 ms later) instead of rewriting fetched data. Applies to any ALSA client on these PCMs; USB and Bluetooth sinks keep their rewinds. Patches 0001 to 0006 apply in order to a clean `42e99ef7` tree.
-- New `boot-ut.img` SHA256 `e155463824426a039f9b4a9c799add3fbc0b8b706ea8ee521f35cdf6ccf082e2` (kernel `#13`, everything in `71ac8a52…` plus patch 0006). Not written yet. This is the image to write next.
-- Waiting for the user: flash, then type quickly on the on-screen keyboard (clicks even, with other audio open too), check music, ringtone preview and a call on the speaker.
+- New `boot-ut.img` SHA256 `e155463824426a039f9b4a9c799add3fbc0b8b706ea8ee521f35cdf6ccf082e2` (kernel `#13`, everything in `71ac8a52…` plus patch 0006). Written by the user.
+- The user confirmed the fix after flashing `e1554638…`: keyboard clicks on the speaker are even again. The speaker part of this item is done again.
 
 ## 4. Wi-Fi
 
@@ -227,7 +227,7 @@ The user added to the goal: LTE (or NR) data and LTE calls should both work. The
 | Voice calls | Working (user confirmed "voice calls work nicely"). On 3G (UMTS) the call connects. On 5G the status bar stays on 5G (IMS: VoLTE/VoNR). |
 | IMS / VoLTE | IMS has registered (`Registered=true`, `VoiceCapable=true`, `SmsCapable=true`). Calls go out over IMS and connect. |
 | Call audio | Working: earpiece downlink is clear, and the microphone uplink is clear (user confirmed). See "Call audio: what fixed it". |
-| MMS | Working (user confirmed). The context has been changed to Fizz (`mobile.bm`, `http://mms.mobile.bm`, `mmsproxy.mobile.bm:80`). |
+| MMS | Working (user confirmed on 2026-11-10): pictures can be sent with Wi-Fi off and with it on, and a picture is received with Wi-Fi on. Mobile data stays up after an MMS. MMS goes through context1 (Fizz, `default,mms`). With Wi-Fi up, `stone-mms-route.service` keeps it on rmnet. See "MMS sending: what broke it". |
 
 #### Why mobile data did not work, and the fix
 
@@ -253,10 +253,58 @@ Measured result (capture in `out/halium14/logs/mobile-data-ok/`, gitignored): in
 #### Still open for mobile data
 
 - IPv6 on the internet PDN: `Protocol=dual` was requested (qcril received `IPV4V6`), but ofono's data call response is `type=0` (IP), so the network only granted IPv4 for `mobile.bm`. This is the carrier's choice, not a local configuration problem. The IMS PDN has IPv6.
-- MMS: `/ril_0/context2` has been changed to `Name=Fizz MMS`, `AccessPointName=mobile.bm`, `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (saved per IMSI). The internet and MMS APNs are the same, which is what UBports ofono-sailfish #8 says can fail, but here the user confirmed MMS works.
+- MMS: `/ril_0/context2` has been changed to `Name=Fizz MMS`, `AccessPointName=mobile.bm`, `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (saved per IMSI). The internet and MMS APNs are the same, which is what UBports ofono-sailfish #8 says can fail, but here the user confirmed MMS works. Superseded: context2 has been removed, and MMS now goes through context1 (see "MMS sending: what broke it").
 - apndb: `tools/apndb-prefer-mvno.py` is called from `build-boot-image.sh`. It takes the rootfs `lineageos-apndb/apns-conf.xml`, keeps only the Fizz entries for 302/500 (`mvno_type=gid`, `mvno_match_data=55`, with those two attributes removed), and drops Vidéotron's four 302/500 entries. The output is written to `/usr/share/stone/apns-conf.xml` (generated, not committed). `ofono.service.d/zz-stone-apndb.conf` sets `OFONO_SYSTEM_APNDB_PATH` to it. This only affects a SIM that has no saved contexts yet. The side effect is that a real Vidéotron SIM would get Fizz's APN.
 - When data fails, the indicator's immediate-retry loop still freezes Settings. That is a bug in the indicator itself. Now that data works it does not trigger, but it will come back if data breaks again.
 - Only SIM 1 has been tested. Slot 2 is empty.
+
+#### MMS sending: what broke it
+
+Symptom: texts send, but every picture ends in "Failed!", and Retry fails the same way. nuntium's log, once per attempt (each Retry is one more):
+
+```
+Starting upload of …m-send.req to http://media.videotron.com with proxy :0
+m-send.conf ResponseStatus for … is 0
+```
+
+That is Vidéotron's MMSC, with no proxy, reached over the default route. It answers with a reply that is not a valid `m-send.conf` (status 0), so nuntium marks the message `PermanentError`.
+
+The cause is leftover state in ofono:
+
+- `/ril_0/context1` (the internet context) still had `MessageCenter=http://media.videotron.com` from the first, wrong apndb provisioning (Vidéotron's `media.ng` is `type=default,mms`). When context1 was changed to Fizz by hand, only `Name`, `AccessPointName` and `Protocol` were changed.
+- nuntium (`ofono/modem.go` `GetMMSContexts`) counts an active internet context with a `MessageCenter` as MMS-capable. If that context has ofono's `Preferred=true`, nuntium uses only that context. context1 now has `Preferred=true`, so `/ril_0/context2` ("Fizz MMS", the right MMSC and proxy) was never tried. When MMS worked, context2 was used, so `Preferred` was probably set on context1 later. Most likely the APN page in System Settings set it; this was not confirmed.
+- Even with the right MMSC, sending through context1 could not work: nuntium takes the proxy from the context's `Settings.Proxy`, and ofono fills that in only for an `mms`-type context.
+
+Second problem, found after the first fix: context2 has the same APN as context1, so ofono-binder gives both contexts the same data call (`rmnet_data1`). When nuntium deactivates context2 after an MMS (it deactivates every context that is not of type internet), ofono tears down that shared call, and context1 (mobile data) goes down with it: `Deactivating context` / `Clearing active context` twice / `Deactivated data call`. NetworkManager kept showing `ril_0` as connected, but there was no rmnet route left. This is the failure UBports ofono-sailfish #8 describes.
+
+Fix, part 1 (on the phone, saved by ofono per IMSI). This is Fizz's own model, a single `mobile.bm` context with `type=default,mms`:
+
+- context1: `MessageCenter=http://mms.mobile.bm`, `MessageProxy=mmsproxy.mobile.bm:80` (changed while it was inactive). ofono also gives an internet context `Settings.Proxy` (checked), and nuntium never deactivates an internet context. With `Preferred=true`, nuntium uses context1 alone.
+- context2 has been removed (`ConnectionManager.RemoveContext`). ofono creates no context like it for a fresh Fizz SIM: `/usr/share/stone/apns-conf.xml` has no Fizz `mms`-only entry. The old context2 came from Vidéotron's provisioning, and was later changed by hand.
+- `~/.cache/nuntium/preferredContext` points at `/ril_0/context2`, which is now stale. That does no harm: context1's `Preferred` decides.
+- To get NetworkManager back in sync after the shared call was torn down, context1 had to be cycled through ofono (Active false, then true). NetworkManager then restored `default via 10.118.17.105 dev rmnet_data1 metric 700`. `nmcli` cannot control networking from an adb shell (polkit).
+
+User test with Wi-Fi off: a picture was sent (nuntium: `ResponseStatus 128`, `Sent`). That was still through context2, before part 1. The tests after both parts are below.
+
+Fix, part 2 (in the image), for sending with Wi-Fi connected. That send failed at once (`Cannot upload m-send.req …`). With Wi-Fi up:
+
+- `mmsproxy.mobile.bm` and `mms.mobile.bm` only resolve through the carrier DNS (`10.208.36.186`, `10.208.37.47`). NetworkManager's dnsmasq asks the Wi-Fi DNS instead, and gets NXDOMAIN.
+- The default route goes through `wlan0`.
+- ofono adds no host route for a proxy given as a hostname.
+
+`stone-mms-route.service` (`usr/lib/stone/mms-route.py`, root) watches ofono. For every active context with a `MessageCenter` (or of type mms) it adds `/32` routes through the context's interface and gateway: first for the context's DNS servers, then for the proxy and MMSC addresses, which it resolves by asking those servers directly (a small UDP A-record client). It writes `address name` lines to `/run/stone-mms/mms-hosts`. `etc/NetworkManager/dnsmasq.d/20-stone-mms.conf` (`hostsdir=/run/stone-mms`) makes NetworkManager's dnsmasq serve those names. dnsmasq re-reads a hostsdir by itself when its files change. `usr/lib/tmpfiles.d/stone-mms.conf` creates the directory before dnsmasq starts. The service re-checks on every ofono context signal and every 10 minutes. If a lookup fails, it keeps the last addresses. When it stops, it removes its routes. Live install without a flash: `tools/phone-debug/stone-mms-route-install.sh` (sudo).
+
+Result (live install, Wi-Fi up, 2026-11-10). The service logged routes over `rmnet_data1` (via `10.118.17.105`) for `10.208.36.186` and `10.208.37.47` (DNS) and for `10.208.106.64` and `10.208.106.65`. Both `mms.mobile.bm` and `mmsproxy.mobile.bm` resolve to those two addresses, and they are in `/run/stone-mms/mms-hosts`. The user confirmed all three tests:
+
+1. With Wi-Fi on, a picture was sent (`Starting upload … to http://mms.mobile.bm with proxy mmsproxy.mobile.bm:80`, `ResponseStatus 128`, `Sent`).
+2. With Wi-Fi off, a picture was sent, and mobile data still worked afterwards.
+3. With Wi-Fi on, a picture was received: `Starting download of http://mms.ingv.ca/… with proxy mmsproxy.mobile.bm:80`, then `m-notifyresp.ind` uploaded.
+
+Limits:
+
+- If an MMS context is separate and only comes up for the MMS (not the case for Fizz now), nuntium could start the upload before the service has added the routes (about 1 s after the context signal). The fix relies on context1 always being up.
+- The hosts file keeps the last addresses for 10 minutes. If the carrier changes them, MMS over Wi-Fi fails until the next refresh.
+- The carrier DNS addresses get `/32` routes over rmnet. A Wi-Fi LAN that uses those same addresses could no longer reach them.
 
 #### Call audio: what fixed it
 
@@ -295,6 +343,7 @@ Known limitations:
 - `mic-test.sh amic1|amic3|handset-mic`: records 2 seconds of microphone through MultiMedia1 and prints the level.
 - `stone-radio-debug.sh` (sudo): turns on `persist.vendor.radio.adb_log_on` and restarts qcril (ofono pauses data for about 3 minutes afterwards), then captures 90 seconds. `stone-radio-debug.sh off` turns it back off (effective at the next boot).
 - `stone-capture.sh` (sudo): copies pstore, the radio/main/system/crash logcat buffers, and dmesg.
+- `stone-mms-route-install.sh` (sudo): installs the MMS-over-Wi-Fi fix (`stone-mms-route.service` and its files) without a flash, then shows its routes, `/run/stone-mms/mms-hosts` and a lookup of the Fizz MMS hosts. Push the four files and the script to `/home/phablet` one by one first.
 - `call-audio.sh` debug subcommands: `route earpiece|speaker|bluetooth` (switches the PulseAudio ports the way the dialer does), `mute 0|1`, `gain DB`, `pcm-rx`, `pcm-tx`, `pcm-off`, `rec-ul [seconds] [file]` (in-call uplink recording, `MultiMedia9 <- VOC_REC_UL`, `hw:0,23`). Setting `STONE_CALL_REC_UL=1` on `stone-call-audio.service` (a user drop-in) records 8 seconds of every call into `$XDG_RUNTIME_DIR`.
 - `stone-bt-sco-debug.sh` (sudo): re-powers the BT chip (restarts bluebinder) and saves dmesg and the BT HAL logcat. Its `BT_CMD_SLIM_TEST` check is a no-op on this kernel (see item 6).
 
@@ -399,6 +448,9 @@ If there is no modem, read ofono's journal first. Do not reflash in a loop. To r
 - The user confirmed this call (droid card unloaded, +20 dB) was "clear". There was no PulseAudio crash during the call. The uplink recording peaked at 10040 (-10.3 dBFS) with no clipping, and active speech was about -31.1 dBFS (for the comparison with +0 and +14, see "Call audio: what fixed it"). The recording is in `out/halium14/logs/call-audio-debug/stone-uplink-1794295468.raw`. The call lasted about 9 seconds, so the 8-second recording ends with a stretch of silence after the hang-up (p10 = 0).
 - The default gain was changed to +20 (`MIC_GAIN=20` in `call-audio.sh`). Deleted `~/.config/stone/call-mic-gain` and `~/.config/systemd/user/stone-call-audio.service.d/`, so there are no stone files left in phablet's home directory. Until the image is written, the `/usr/lib/stone/call-audio.sh` on the phone still defaults to +14.
 - New `boot-ut.img` SHA256 `4af37a0d26ce4892184fcef1d6c19bce8603e770423bf052f1337e709207ce21` (kernel `#9`; default +20 dB, no droid card, no PartOf, `stone-call-audio` enabled, removal list for the debug drop-in and the core-dump drop-in). Superseded by `20b85c73…` in item 6.
+- 2026-11-10: picture MMS failed ("Failed!", Retry the same). The cause was a stale Vidéotron `MessageCenter` on the internet context `/ril_0/context1`, plus `Preferred=true` on it, so nuntium sent to `http://media.videotron.com` without a proxy. context1's `MessageCenter`/`MessageProxy` were cleared and nuntium's preferred context was set to `/ril_0/context2`. See "MMS sending: what broke it". The user then confirmed: sending works with Wi-Fi off, but not with Wi-Fi on.
+- 2026-11-10: the context2 test showed that deactivating the same-APN MMS context takes down mobile data. context1 became the single `default,mms` context (Fizz's MMSC and proxy) and context2 was removed. For Wi-Fi, `stone-mms-route.service` was added (host routes over rmnet plus a dnsmasq hostsdir). It was installed live with `stone-mms-route-install.sh`. The user confirmed: a picture sent with Wi-Fi on, a picture sent with Wi-Fi off with data still up afterwards, and a picture received with Wi-Fi on.
+- New `boot-ut.img` SHA256 `15c0d147ac13b42ad26862414086463929dc233fda74be8e67c4d5f066b4e80f` (kernel `#13`; adds `stone-mms-route.service`, `usr/lib/stone/mms-route.py`, `etc/NetworkManager/dnsmasq.d/20-stone-mms.conf`, `usr/lib/tmpfiles.d/stone-mms.conf`). Not yet written. The previous image is kept as `boot-ut-e1554638.img`. The first build had picked up a `__pycache__` from a local test, so that build was discarded.
 
 ## 6. Bluetooth
 

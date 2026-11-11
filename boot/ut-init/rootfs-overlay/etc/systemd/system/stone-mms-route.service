@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep MMS traffic on the cellular data call while Wi-Fi is up
+# See /usr/lib/stone/mms-route.py. dnsmasq (started by NetworkManager) reads
+# the hosts file it writes through etc/NetworkManager/dnsmasq.d/20-stone-mms.conf.
+After=dbus.service ofono.service NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/mms-route.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
