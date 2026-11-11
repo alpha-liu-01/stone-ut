@@ -1,0 +1,53 @@
+diff --git a/include/uapi/sound/asound.h b/include/uapi/sound/asound.h
+index da8a729a3..36d9c7156 100644
+--- a/include/uapi/sound/asound.h
++++ b/include/uapi/sound/asound.h
+@@ -303,6 +303,7 @@ typedef int __bitwise snd_pcm_subformat_t;
+ #define SNDRV_PCM_INFO_HAS_LINK_ESTIMATED_ATIME    0x04000000  /* report estimated link audio time */
+ #define SNDRV_PCM_INFO_HAS_LINK_SYNCHRONIZED_ATIME 0x08000000  /* report synchronized audio/system time */
+ 
++#define SNDRV_PCM_INFO_NO_REWINDS	0x20000000	/* hardware can only support monotonic changes of appl_ptr (backport from 5.17) */
+ #define SNDRV_PCM_INFO_DRAIN_TRIGGER	0x40000000		/* internal kernel flag - trigger in drain */
+ #define SNDRV_PCM_INFO_FIFO_IN_FRAMES	0x80000000	/* internal kernel flag - FIFO size is in frames */
+ 
+diff --git a/sound/core/pcm_native.c b/sound/core/pcm_native.c
+index 95dac4040..4bd168022 100644
+--- a/sound/core/pcm_native.c
++++ b/sound/core/pcm_native.c
+@@ -2753,6 +2753,12 @@ static snd_pcm_sframes_t rewind_appl_ptr(struct snd_pcm_substream *substream,
+ 	snd_pcm_sframes_t appl_ptr;
+ 	int ret;
+ 
++	/* stone-ut, backport of 5.17 "ALSA: pcm: introduce INFO_NO_REWINDS
++	 * flag": hardware that already fetched the data (a DSP reading ahead
++	 * of hw_ptr) would play stale data in the rewound part.
++	 */
++	if (runtime->info & SNDRV_PCM_INFO_NO_REWINDS)
++		return 0;
+ 	if (avail <= 0)
+ 		return 0;
+ 	if (frames > (snd_pcm_uframes_t)avail)
+diff --git a/techpack/audio/asoc/msm-pcm-q6-v2.c b/techpack/audio/asoc/msm-pcm-q6-v2.c
+index ac78ef982..6e0a98ade 100644
+--- a/techpack/audio/asoc/msm-pcm-q6-v2.c
++++ b/techpack/audio/asoc/msm-pcm-q6-v2.c
+@@ -97,10 +97,19 @@ static struct snd_pcm_hardware msm_pcm_hardware_capture = {
+ };
+ 
+ static struct snd_pcm_hardware msm_pcm_hardware_playback = {
++	/*
++	 * stone-ut: NO_REWINDS. The ADSP reads the buffer ahead of the
++	 * reported hw_ptr, so a rewound and rewritten region partly never
++	 * plays (the old data does). PulseAudio 16 rewinds on stream start /
++	 * end of underrun even with max_rewind 0, which cut the first ~10 ms
++	 * off short sounds (keyboard clicks) on the speaker. "Rewound 0
++	 * frames" makes it queue new data behind what is already buffered.
++	 */
+ 	.info =                 (SNDRV_PCM_INFO_MMAP |
+ 				SNDRV_PCM_INFO_BLOCK_TRANSFER |
+ 				SNDRV_PCM_INFO_MMAP_VALID |
+ 				SNDRV_PCM_INFO_INTERLEAVED |
++				SNDRV_PCM_INFO_NO_REWINDS |
+ 				SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME),
+ 	.formats =              (SNDRV_PCM_FMTBIT_S16_LE |
+ 				SNDRV_PCM_FMTBIT_S24_LE |
