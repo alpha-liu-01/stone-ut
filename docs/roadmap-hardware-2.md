@@ -40,8 +40,8 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
 2. USB file transfer (MTP). Done 2026-11-10 (kernel patch 0007). Before the fix, turning on MTP in Settings turned developer mode off, adb disappears, USB falls back to charging only, and the PC never shows the phone. Added on 2026-11-10, ahead of the decoders.
 3. Hardware video and audio decoding. Checked 2026-11-10: already working. H.264, VP9 and HEVC (also the camera's own recordings) play in the Media Player on Qualcomm's Codec2 hardware decoders, with zero-copy output to `hybrissink`. Video in Morph (QtWebEngine) is software-decoded, with no hardware path on this stack (2026-11-11). media-hub's own CPU use: per-frame debug logging from Halium's media compat layer was turned off (about 8 % of a core saved at 30 fps); the rest is inherent.
 4. MicroSD card. Added and done 2026-11-11. Detection, mount, MTP, the media scanner, speed and integrity were already fine. Fixed: a fixed 100 ms per written file on FAT cards (udisks' vfat `flush`), now 6.6 ms per file including sync.
-5. Camera leftovers. Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
-6. Power. Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
+5. Camera leftovers. Skipped 2026-11-11: already working (user). Flash and torch, tap-to-focus, zoom, and the barcode reader have not been tested (`docs/roadmap-hardware.md` item 7, "Still open or untested").
+6. Power. Skipped 2026-11-11: already working (user). Suspend and deep sleep, standby battery drain, and the battery level and health readings in Settings. Not checked yet.
 7. Location (GNSS). Pure Maps found no position (2026-11-11). The engine was fine but always cold-started: Qualcomm's `xtra-daemon` was not enabled, and the HAL was never told about the network, so there was no time or XTRA data. Fixed with `stone-gnss-netstate.service` (an indoor fix in about 30 s, 4 m accuracy). Done 2026-11-11: confirmed in Pure Maps. SUPL is left out (unimplemented upstream).
 8. Fingerprint reader. Not checked yet.
 9. Smaller items:
@@ -49,6 +49,7 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
    - call volume keys (they change the media volume, not `Voice Rx Gain`);
    - wideband Bluetooth calls (mSBC);
    - the IR emitter and NFC, if the hardware has them.
+10. GPU and graphics APIs. Checked 2026-11-11: the UI uses the intended path (Mir `graphics-android2` with Adreno GLES 3.2 through libhybris), and Vulkan 1.1 works through `libvulkan1-hybris`. Desktop OpenGL is software only (Mesa llvmpipe). No fix needed for the system; options for hardware desktop GL are recorded.
 
    None of these has been checked yet.
 
@@ -403,11 +404,15 @@ Goal: flash and torch, tap-to-focus, zoom and the barcode reader work.
 
 What is seen: not tested (`docs/roadmap-hardware.md` item 7). The flash shares TLMM pin 38 with the camera sensors (kernel patch 0005). Photo orientation depends on item 1.
 
+Skipped (2026-11-11): the user reports these already work well. No changes.
+
 ## 6. Power
 
 Goal: the phone suspends when the screen is off, standby drain is reasonable, and Settings shows the battery level and health.
 
 What is seen: not checked yet.
+
+Skipped (2026-11-11): the user reports this already works well. No changes.
 
 ## 7. Location (GNSS)
 
@@ -523,3 +528,52 @@ What is seen: not checked yet.
 - Call volume keys controlling the call volume (`Voice Rx Gain`) instead of the media volume (`docs/roadmap-hardware.md` item 6).
 - Wideband Bluetooth calls (mSBC). Calls are now narrowband CVSD with `enable_msbc=false`.
 - The IR emitter and NFC: first check whether this model has them.
+
+## 10. GPU and graphics APIs
+
+Goal: know which GPU path the system uses, whether that is the intended one, and which APIs (OpenGL ES, OpenGL, Vulkan) have hardware acceleration.
+
+What is seen: hardware acceleration seemed to work since the first boot (smooth UI), but it was never tested.
+
+### Current state (2026-11-11, image `065ee6e5…`)
+
+**The path in use is the intended one.**
+- UBports' Mir 1.8.3 fork (`mir1`) has a single server platform, `/usr/lib/aarch64-linux-gnu/mir1/server-platform/graphics-android2.so.16`. It composes through hwcomposer, as on any Halium device.
+- Lomiri (`lomiri --mode=full-greeter`) has these mapped:
+  - glvnd `libEGL.so.1` → `libEGL_libhybris` → Android `libEGL` (META-EGL) → `/vendor/lib64/egl/libEGL_adreno.so`, `libGLESv2_adreno.so`, `libgsl.so` (the KGSL client) and `libllvm-glnext.so` (Adreno shader compiler);
+  - the QTI gralloc mapper 4.0, `graphics-android2.so.16` and `eglplatform_null`.
+
+  `libEGL_mesa` is mapped too, because glvnd loads every vendor (`/usr/share/glvnd/egl_vendor.d/10_libhybris.json` before `50_mesa.json`), but it is not what renders.
+- Apps (morph-browser, for example) map the same Adreno libraries.
+
+Device nodes: `/dev/kgsl-3d0` (`system:system 0666`, the GPU) and `/dev/dri/card0` + `renderD128` (`root:android_graphics 0666`), which belong to the msm display (SDE) driver. That DRM device has no GPU behind it: the Adreno is only reachable through KGSL.
+
+GPU: `Adreno619v2`, 266/390/490/650/700 MHz, devfreq governor `msm-adreno-tz`, scaling as expected (390 MHz, 38 % busy right after the tests), `thermal_pwrlevel` 0.
+
+Measured with `tools/phone-debug/gpu-probe.py`: ctypes probes, because the rootfs has no eglinfo, glxinfo or vulkaninfo. They run as phablet, headless (pbuffer), with `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=65536` for libhybris in Python (see item 3).
+
+| API | Path | Result |
+| --- | --- | --- |
+| OpenGL ES 2.0/3.x | libhybris → Adreno (`EGL_PLATFORM=null`, pbuffer) | **Hardware.** `Qualcomm` / `Adreno (TM) 619` / `OpenGL ES 3.2 V@0530.0 (GIT@c263890aed, Ifb496a9c37, 1656315076) (Date:06/27/22)`, GLSL ES 3.20, 98 GL extensions, EGL 1.5 "Android META-EGL" with 45 extensions. glClear + glReadPixels read back exactly `[64, 128, 191, 255]` |
+| OpenGL (desktop) | libhybris → Adreno | **Not available.** `EGL_CLIENT_APIS` is only `OpenGL_ES`; a GL config fails with `EGL_BAD_ATTRIBUTE` |
+| OpenGL (desktop) and GLES | Mesa 24.0.9 (`EGL_PLATFORM=surfaceless`, Mesa vendor only) | **Software:** `llvmpipe (LLVM 17.0.6, 128 bits)`, OpenGL 4.5 Compatibility / GLES 3.2. The same with `MESA_LOADER_DRIVER_OVERRIDE=kgsl` or `msm`: surfaceless only opens DRM render nodes, `renderD128` is display-only, and Mesa 24.0's Gallium freedreno has no KGSL backend (`kgsl_dri.so` exists but is not reached) |
+| Vulkan | `libvulkan1-hybris` (`/usr/lib/aarch64-linux-gnu/libvulkan.so.1.2.183`, libhybris's own loader; no Khronos ICDs installed) → `/vendor/lib64/hw/vulkan.adreno.so` | **Hardware.** 13 instance extensions including `VK_KHR_wayland_surface`. One device: `Adreno (TM) 619`, integrated, API **1.1.128**, driver `0x80212000` (512.530.0), vendor `0x5143`, 63 device extensions including `VK_KHR_swapchain` and `VK_ANDROID_external_memory_android_hardware_buffer`. `vkCreateDevice`, a queue and `vkDeviceWaitIdle` all succeed |
+| Vulkan on screen | libhybris `test_vulkan` (Wayland client on Lomiri's `wayland-0`: surface, swapchain, render loop) | Runs: past 1140 frames in 12 s, clean exit. The screen was off, so presentation was not throttled and nobody saw the window |
+
+Lomiri itself (Qt Quick on GLES through Mir) is proof of on-screen GLES. "`dlopen failed: library "libadreno_app_profiles.so" not found`" is printed by the Adreno driver at start. This vendor does not ship that library (per-app tuning profiles), so it is harmless.
+
+### Recommendations
+
+Nothing needs fixing for the system. The UI, Qt apps, QtWebEngine and Vulkan apps all get the GPU. Options, if they are ever wanted:
+
+1. **Hardware desktop OpenGL** (Libertine/X11 desktop apps, some games). Today these fall back to llvmpipe on the CPU.
+   - Lowest risk: **gl4es** (OpenGL 1.x/2.1 → GLES 2 translation, as a library or `LD_PRELOAD`) on top of the hybris GLES. It covers older GL apps and games. It is not in Ubuntu's archive, so it would need building and shipping.
+   - Research only: **turnip (Mesa Vulkan) with its KGSL backend, plus zink** (Mesa OpenGL on Vulkan), which would give OpenGL 4.6 and Vulkan 1.3 in hardware with open drivers. It needs Mesa built with `-Dfreedreno-kmds=kgsl` (Ubuntu builds only `msm`), a Vulkan loader that coexists with `libvulkan1-hybris`, and buffer sharing with the hybris/Mir compositor. That is a large project.
+   - zink on the vendor Vulkan through libhybris is not recommended: Vulkan 1.1.128 lacks much of what zink needs, and zink expects Mesa's winsys.
+2. **Vulkan 1.1 → 1.3** would need newer Adreno blobs than this vendor's 2022 `V@0530` (the A619 hardware gets 1.3 from newer drivers). Replacing GPU blobs under a vendor is risky. Not recommended unless an app needs it.
+3. Optional check: run libhybris' `test_vulkan` with the screen on and unlocked (`XDG_RUNTIME_DIR=/run/user/32011 WAYLAND_DISPLAY=wayland-0 test_vulkan`) to see its window. Headless and off-screen presentation already work.
+
+### Events
+
+- 2026-11-11: the user reports acceleration has seemed fine since the first boot. Checked the compositor path, the device nodes and the GPU clocks. Probed GLES (hardware), desktop GL (Adreno: none; Mesa: llvmpipe, also with the kgsl/msm overrides) and Vulkan (hardware, device creation, and `test_vulkan` presenting on Lomiri's Wayland). Wrote `tools/phone-debug/gpu-probe.py`. No changes to the image.
+
