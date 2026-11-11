@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh rate requests from System Settings
+# /usr/share/stone/settings/refresh_rate.py writes the request as phablet;
+# /run/stone-refresh-rate is 0770 root:phablet (tmpfiles.d/stone-refresh-rate.conf).
+After=systemd-tmpfiles-setup.service
+
+[Path]
+PathChanged=/run/stone-refresh-rate/request
+Unit=stone-refresh-rate-request.service
+
+[Install]
+WantedBy=multi-user.target

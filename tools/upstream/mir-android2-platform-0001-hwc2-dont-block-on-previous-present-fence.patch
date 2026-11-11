@@ -1,0 +1,40 @@
+From e8f8bdc1ae07402505d2ac62d422ace05706663f Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <p0sixspwn8@gmail.com>
+Date: Wed, 11 Nov 2026 12:42:11 -0500
+Subject: [PATCH] hwc2: don't block on the previous frame's present fence
+
+RealHwc2Wrapper::set() waited, after presenting frame N, for the present
+fence of frame N-1. With Qualcomm's SDM composer on a 120 Hz panel (Xiaomi
+Redmi Note 12 5G, SM4375) that wait costs a whole extra vsync per frame:
+the system compositor never exceeded 60 fps. Without
+the wait it composes up to the panel rate (measured: 108-117 fps through
+a nested Lomiri). Back pressure is unchanged: the framebuffers are guarded
+by the following frame's present fence.
+---
+ src/platforms/android/server/real_hwc2_wrapper.cpp | 9 ++++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/platforms/android/server/real_hwc2_wrapper.cpp b/src/platforms/android/server/real_hwc2_wrapper.cpp
+index 139800e..604fb58 100644
+--- a/src/platforms/android/server/real_hwc2_wrapper.cpp
++++ b/src/platforms/android/server/real_hwc2_wrapper.cpp
+@@ -319,11 +319,13 @@ void mga::RealHwc2Wrapper::set(
+             // android11-gsi/graphics/composer/2.1/utils/hwc2on1adapter/include/hwc2on1adapter/HWC2On1Adapter.h#137
+             // and https://source.android.com/docs/core/graphics/sync#hardware_composer_integration
+ 
+-            // Wait for the previously submitted frame to be displayed to ensure we're not rendering too fast
+-            // FIXME: is needed at all?
++            // Do not wait here for the previously submitted frame to be
++            // displayed. With some composers (Qualcomm SDM) that wait costs
++            // a whole extra vsync per frame: 60 Hz on a 120 Hz panel. Back pressure already comes from the
++            // framebuffers, each guarded by the next frame's present fence
++            // (update_usage() below).
+             auto _last_present_fence = last_present_fence[display_id];
+             if (_last_present_fence != -1) {
+-                sync_wait(_last_present_fence, -1);
+                 close(_last_present_fence);
+                 last_present_fence[display_id] = -1;
+             }
+-- 
+2.53.0
+

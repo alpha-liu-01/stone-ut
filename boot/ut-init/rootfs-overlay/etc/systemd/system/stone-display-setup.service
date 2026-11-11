@@ -1,0 +1,18 @@
+[Unit]
+Description=120 Hz frame pacing, GPU governor and refresh rate for stone's display
+# See /usr/lib/stone/display-setup.sh. Must finish before the system
+# compositor (lightdm -> lomiri-system-compositor) loads the Mir platform.
+Before=lightdm.service display-manager.service
+After=local-fs.target
+# Not ordered after the Android container (lightdm does not wait for it
+# either); only with /etc/stone/refresh-rate = 60 does the script poll, up to
+# 30 s, for the composer's display config service, delaying lightdm meanwhile.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/stone/display-setup.sh
+TimeoutStartSec=45
+
+[Install]
+WantedBy=multi-user.target

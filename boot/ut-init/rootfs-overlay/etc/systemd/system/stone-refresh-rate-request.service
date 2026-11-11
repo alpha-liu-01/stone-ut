@@ -1,0 +1,7 @@
+[Unit]
+Description=Apply a refresh rate request from System Settings
+# Started by stone-refresh-rate.path; see /usr/lib/stone/refresh-rate-request.sh.
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/lib/stone/refresh-rate-request.sh

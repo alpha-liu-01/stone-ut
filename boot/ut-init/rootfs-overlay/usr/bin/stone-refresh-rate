@@ -1,0 +1,35 @@
+#!/bin/sh
+# Show or choose the panel refresh rate (stone).
+#
+#   stone-refresh-rate            saved setting and the panel's current mode
+#   sudo stone-refresh-rate 60    save 60 Hz and switch now
+#   sudo stone-refresh-rate 120   save 120 Hz (default) and switch now
+#
+# The saved rate is applied at boot before the system compositor starts
+# (stone-display-setup.service), which is when Mir reads it and paces every
+# app by it. A switch made now changes the panel at once, but running apps
+# keep pacing themselves at the old rate until the display restarts: reboot,
+# or add --restart-display (restarts lightdm: open apps close, unlock again).
+RATE_FILE=/etc/stone/refresh-rate
+MODE="python3 -I /usr/lib/stone/display-mode.py"
+
+case "${1:-}" in
+"")
+    echo "saved: $(cat "$RATE_FILE" 2>/dev/null || echo 120) Hz"
+    echo "panel: $($MODE get)"
+    ;;
+60|120)
+    [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+    mkdir -p "$(dirname "$RATE_FILE")"
+    echo "$1" > "$RATE_FILE"
+    $MODE set "$1" || exit 1
+    if [ "${2:-}" = --restart-display ]; then
+        systemctl restart lightdm
+    else
+        echo "saved; apps fully pace at $1 Hz after a reboot (or: sudo $0 $1 --restart-display)"
+    fi
+    ;;
+*)
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1 ;;
+esac

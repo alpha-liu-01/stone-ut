@@ -19,6 +19,7 @@ The phone has no passwordless sudo. Anything that needs root has to be run by th
 
 State at the start (2026-11-10):
 - `boot_b`: `e1554638…` (kernel `#13`).
+- New image (2026-11-11, not yet written): `0ea13aae…` (adds the refresh rate setting in System Settings > Brightness, item 11). Before it: `675fd590…` (kernel `#15` with the 60 Hz panel command fix, plus `stone-display-setup.service` and `stone-refresh-rate`), written and confirmed on 2026-11-11, kept as `out/halium14/boot-ut-675fd590.img`. `065ee6e5…` is kept as `out/halium14/boot-ut-065ee6e5.img`.
 - Current `boot_b` (updated 2026-11-11): `065ee6e5…` (kernel `#14`; USB MTP, the media log levels, the microSD mount options and the GNSS service), written and confirmed on 2026-11-11. Earlier: `a706816c…` (log levels). Before it: `7d432e5d…` (USB MTP), kept as `out/halium14/boot-ut-7d432e5d.img`. Before it: `e3d83362…` (MMS over Wi-Fi and the sensors fixes of item 1), kept as `out/halium14/boot-ut-e3d83362.img`. `15c0d147…` (MMS only) is kept as `out/halium14/boot-ut-15c0d147.img`.
 - Ubuntu Touch 24.04-2.x, Halium 14, crDroid 14 vendor.
 - The deferred system update work is at the end of `docs/roadmap-hardware.md`.
@@ -50,6 +51,7 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
    - wideband Bluetooth calls (mSBC);
    - the IR emitter and NFC, if the hardware has them.
 10. GPU and graphics APIs. Checked 2026-11-11: the UI uses the intended path (Mir `graphics-android2` with Adreno GLES 3.2 through libhybris), and Vulkan 1.1 works through `libvulkan1-hybris`. Desktop OpenGL is software only (Mesa llvmpipe). No fix needed for the system; options for hardware desktop GL are recorded.
+11. 120 Hz display. Added 2026-11-11: the panel ran at 120 Hz, but the UI never got past 60 fps. Two causes: the system compositor waited for the previous frame's present fence after every frame (two vsyncs per frame), and the GPU governor kept the GPU at 266 MHz while scrolling. Fixed with `stone-display-setup.service` and kernel `#15` (the 60 Hz panel command). The 60/120 Hz choice is in System Settings > Brightness (and `stone-refresh-rate`). Done 2026-11-11.
 
    None of these has been checked yet.
 
@@ -548,7 +550,7 @@ What is seen: hardware acceleration seemed to work since the first boot (smooth 
 
 Device nodes: `/dev/kgsl-3d0` (`system:system 0666`, the GPU) and `/dev/dri/card0` + `renderD128` (`root:android_graphics 0666`), which belong to the msm display (SDE) driver. That DRM device has no GPU behind it: the Adreno is only reachable through KGSL.
 
-GPU: `Adreno619v2`, 266/390/490/650/700 MHz, devfreq governor `msm-adreno-tz`, scaling as expected (390 MHz, 38 % busy right after the tests), `thermal_pwrlevel` 0.
+GPU: `Adreno619v2`, 266/390/490/650/700 MHz, devfreq governor `msm-adreno-tz`, scaling as expected (390 MHz, 38 % busy right after the tests), `thermal_pwrlevel` 0. Correction (item 11): while Lomiri scrolls, the governor stays at 266 MHz at ~60 % busy, which caps scrolling at 60 fps on the 120 Hz panel.
 
 Measured with `tools/phone-debug/gpu-probe.py`: ctypes probes, because the rootfs has no eglinfo, glxinfo or vulkaninfo. They run as phablet, headless (pbuffer), with `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=65536` for libhybris in Python (see item 3).
 
@@ -577,3 +579,136 @@ Nothing needs fixing for the system. The UI, Qt apps, QtWebEngine and Vulkan app
 
 - 2026-11-11: the user reports acceleration has seemed fine since the first boot. Checked the compositor path, the device nodes and the GPU clocks. Probed GLES (hardware), desktop GL (Adreno: none; Mesa: llvmpipe, also with the kgsl/msm overrides) and Vulkan (hardware, device creation, and `test_vulkan` presenting on Lomiri's Wayland). Wrote `tools/phone-debug/gpu-probe.py`. No changes to the image.
 
+
+## 11. 120 Hz display
+
+The panel (`1080x2400`, DSI video mode) has a 120 Hz and a 60 Hz mode, each in two pixel-clock variants (`1080x2400x120x183275vid`, `…x184666vid`, `1080x2400x60x…`). It worked at 120 Hz on Android. On Ubuntu Touch there was no 60/120 switch, and scrolling did not feel like 120 Hz (user, 2026-11-11).
+
+### What the display stack does
+
+- **Mode.** Qualcomm's composer starts in config `#0`, 120 Hz. Mir's Android platform (the hwc2 compat layer, `libhwc2_compat_layer.so`) only reads the active config: there is no call to list or set configs. Mir builds one mode from its vsync period, and `mirout` shows `1080x2400 120.00`. Lomiri's Qt Quick animation driver uses 8.33 ms. So nothing was set to 60.
+- **Two compositors.** `lomiri-system-compositor` (started by lightdm through `lsc-wrapper`) owns hwcomposer. Lomiri is a nested Mir server (`MIR_SERVER_HOST_SOCKET=/run/mir_socket`) that renders with Qt Quick's threaded render loop into a mirclient surface of the system compositor. Apps are mirclient clients of Lomiri (`QT_QPA_PLATFORM=ubuntumirclient` for Qt 5).
+- **The system compositor** composes every frame with GL into its framebuffer target (HWC2 overlays are not used), presents it to HWC, and then waits.
+
+### Measurements
+
+Tools (no root needed unless noted):
+- `tools/phone-debug/fps-panel.py`, once a second:
+  - the real panel vsync period, from `/sys/class/drm/sde-crtc-0/vsync_event`, which is notified on every vsync;
+  - frames committed to the panel (`measured_fps`);
+  - GPU load and clock (kgsl);
+  - CPU cluster clocks.
+- `tools/phone-debug/fps-probe.qml`: a full-screen animating test app.
+- `tools/phone-debug/fps-test.sh`: the phases, plus Lomiri's per-frame render-loop timing (`QSG_RENDER_TIMING=1`), turned on through a runtime drop-in with `lomiri-report-on`.
+  - `sudo … clocks` compares clock settings.
+
+Results (2026-11-11):
+
+| Case | Panel vsync | Frames to the panel | Notes |
+| --- | --- | --- | --- |
+| Stock, scrolling the app drawer or Settings | 8.35 ms (119.7 Hz) | 55–62 fps | Lomiri: 6 ms render, then 9 ms blocked in `eglSwapBuffers` |
+| Compositor wait removed, test app | 8.35 ms | 104–116 fps | the app renders 120 fps; Lomiri 1 ms render |
+| Compositor wait removed, app drawer, stock governors | 8.35 ms | 57 fps | GPU 266 MHz at ~60 % busy |
+| … GPU governor `mod_percent=200` | 8.35 ms | **96–100 fps** | GPU ramps itself to 700 MHz |
+| … GPU floor 490 MHz | 8.35 ms | 84–89 fps | |
+| … CPU clusters at max, GPU stock | 8.35 ms | 61–70 fps | the CPU is not the limit |
+| … GPU and CPU at max | 8.35 ms | 104–107 fps | Lomiri 4 ms render + 4 ms swap |
+
+Notes:
+- The test app's own QML `frameSwapped` counter under-counted by half. The app rendered 119–120 frames a second, counted from Qt's render-timing log. Apps are not capped at 60.
+- With everything at max, about 105 fps is the ceiling for the app drawer through the two compositors (the CPU, the GPU and both compositors work one after another per frame). Simpler scenes reach 115.
+
+### 120 Hz: what fixed it
+
+1. **The system compositor's present-fence wait.**
+   - In `mir-android2-platform`, `RealHwc2Wrapper::set()` (`real_hwc2_wrapper.cpp`) presents frame N, then calls `sync_wait(last_present_fence, -1)` on frame N-1's fence. It carries the comment "FIXME: is needed at all?". With Qualcomm's composer that wait costs a whole extra vsync per frame, so the system compositor never passed 60 fps, and Lomiri sat blocked in swap.
+   - Without the wait, back pressure still comes from Mir's three framebuffers, each guarded by the present fence of the frame after it (`update_usage()`).
+   - The fix: at boot, `/usr/lib/stone/display-setup.sh` copies `graphics-android2.so.16` to `/run/stone-display/`, changes that one call's timeout from -1 to 0 (`mov w1,#-1` → `mov w1,#0` at file offset `0x3c834`), and bind-mounts the copy over the original. It does this only when the installed file is the exact build it was made for:
+     - package `mir1-platform-graphics-android2-16` `1.8.0~20260320103600.20~72f96d2+ubports24.04.2`;
+     - stock sha256 `146cf674…`, patched `bc58bdfd…`.
+
+     Any other build is left alone and logged, so a package update falls back to 60 fps pacing and nothing breaks.
+   - The proper source fix, for upstream: `tools/upstream/mir-android2-platform-0001-hwc2-dont-block-on-previous-present-fence.patch`.
+2. **The GPU governor.**
+   - `msm-adreno-tz` saw ~60 % busy while Lomiri scrolled, because each frame is serialized (Lomiri on the CPU, its GPU work, then the system compositor), and kept the GPU at 266 MHz. At that clock a frame takes ~16 ms.
+   - The governor's `mod_percent` (`/sys/class/kgsl/kgsl-3d0/devfreq/mod_percent`, 10–1000, default 100, kept across suspend) scales the busy time it sees. The fix sets it to 200 at boot. The GPU then ramps to 700 MHz under scrolling and drops back when idle.
+   - On Android, Qualcomm's perf HAL raises the clock floors on touch instead.
+3. **Refresh rate choice.**
+   - `/usr/lib/stone/display-mode.py` talks to the composer's own `vendor.display.config@2.0::IDisplayConfig` (hwbinder): `registerClient` with a local callback object, then `perform()` with the opcodes and packed structs of Qualcomm's display-commonsys.
+   - `list`, `get` and `set 60|120` work as phablet. A set is applied at the composer's next commit: switching to 60 measured a vsync of 16.71 ms and 60 committed frames, and back at 120, 8.35 ms.
+   - Mir reads the rate only when it starts, so running clients keep their old pacing after a live switch.
+   - Hence `stone-refresh-rate`:
+     - `sudo stone-refresh-rate 60|120` saves the choice in `/etc/stone/refresh-rate` and switches now;
+     - `--restart-display` also restarts lightdm;
+     - `display-setup.sh` applies a saved 60 before lightdm at boot. The default is 120 (no file).
+
+Files: `etc/systemd/system/stone-display-setup.service` (oneshot, `Before=lightdm.service`, enabled through `multi-user.target.wants`), `usr/lib/stone/display-setup.sh`, `usr/lib/stone/display-mode.py`, `usr/bin/stone-refresh-rate`. Live install: `tools/phone-debug/stone-display-install.sh`, then reboot.
+
+### Reboot test (2026-11-11)
+
+- **120 Hz boot**, with both fixes from `stone-display-setup.service`, user confirmed:
+  - test app: 101–114 fps on the panel, the app rendering 120;
+  - app drawer: 95–103 fps, the GPU ramping to 700 MHz by itself;
+  - System Settings: up to 103 fps.
+- **60 Hz boot** (`sudo stone-refresh-rate 60`, reboot): the composer kept the config when the system compositor connected.
+  - Panel vsync 16.5 ms; the test app paced itself at exactly 60 fps, because Mir read 60 at start; the app drawer ran at 60.
+  - **But the screen flashed constantly** (user).
+
+### 60 Hz flicker: cause and fix
+
+- The panel (`qcom,mdss_dsi_m17_38_0c_0a_fhdp_dsc_vid`, Samsung DDIC, DSC, video mode) has a single 120 Hz timing. Its 60 Hz modes are Qualcomm dynamic FPS:
+  - `qcom,dsi-supported-dfps-list = 120 60`, `dfps_immediate_porch_mode_vfp`: the same timing with a longer vertical front porch;
+  - two DSI bit clocks (`qcom,dsi-dyn-clk-list`), which give the two variants of each mode.
+- The DDIC must also be told the rate. Xiaomi's per-timing commands `qcom,mdss-dsi-dispparam-bc-60hz-command` (`f0 5a 5a`, `60 21`, `f7 0b`) and `bc-120hz-command` (`60 01`) set register `0x60`.
+- The kernel sends them in two places:
+  - `dsi_panel_enable()`, for the current mode;
+  - `dsi_set_backlight_control()`, called from `sde_encoder_kickoff()` on every frame, which sends one when `cur_mode` refresh differs from `panel->dsi_refresh_flag`.
+- `dsi_refresh_flag` starts at **60** (`dsi_panel.c`). With continuous splash (this phone: "cont_splash enabled"), the bootloader leaves the DDIC in its 120 Hz setting, and `dsi_display_enable()` returns early (`panel_initialized = true`, no `dsi_panel_enable()`).
+  - On Android, and on a 120 Hz boot here, the first frame is 120 ≠ 60, so `BC_120HZ` is sent; a later switch to 60 sends `BC_60HZ`.
+  - A boot straight into 60 Hz: 60 = 60, so nothing is sent. The DDIC stays in its 120 Hz setting while frames arrive at 60. The kernel log shows no `refresh_rate =` line from `dsi_set_backlight_control()` on that boot.
+- Fix: `kernel/patches/0008-dsi-send-refresh-rate-command-on-first-frame.patch` starts `dsi_refresh_flag` at 0, so the first frame always sends the command for its rate. Kernel `#15 SMP PREEMPT Wed Nov 11 12:58:15 EST 2026`: `kernel/build-14/arch/arm64/boot/Image`, 48130560 bytes, SHA256 `5f9853f45a07d99372131a8a4ae7e5319aaef5d26fb48cfc868c5c1397971a1c`. `#14` is kept at `out/halium14/Image-14`.
+- Check without the new kernel: turning the screen off and on runs `dsi_panel_enable()`, which sends `BC_60HZ`, so the flicker should stop until the next reboot.
+
+### Still open (120 Hz)
+
+- 60 Hz boot with kernel `#15`: no flicker (user, image `675fd590…`). Earlier, confirmed without the new kernel: after a screen off/on at 60 Hz (which sends `BC_60HZ` through `dsi_panel_enable()`), the flashing stopped (user, 2026-11-11).
+- Image `675fd59048e4c2581ab28124bdb7b4ba7ad8f93f99c36b73f105871d6f8fe0d7`: the `#15` Image (byte-identical), with the item 11 files in the overlay. Written 2026-11-11 (user): it works as expected; the phone was set back to 120 Hz.
+- Power: 120 Hz scanout costs more than 60 Hz even when nothing changes (video mode, no panel self-refresh), and the GPU now clocks higher while drawing. Battery drain at 60 vs 120 has not been measured.
+- Not done: Android-style dynamic switching (60 Hz when idle, 120 Hz on touch). Mir paces clients by the rate it read at start, so it would need Mir changes.
+
+### Refresh rate in System Settings
+
+System Settings > Brightness has a **Refresh rate** section under "Adjust automatically":
+- **Standard (60 Hz)** or **Smooth (120 Hz)**;
+- a caption: 120 Hz is smoother and uses more battery. When the saved rate differs from the panel's current one, the caption says so ("Now 60 Hz; 120 Hz after the display restarts").
+- Choosing the other rate opens a dialog:
+  - **Restart display now:** saves, switches the panel and restarts lightdm. Open apps close, and the phone locks.
+  - **At next restart:** saves only.
+  - **Cancel**
+
+How it is built:
+- **The page.** The stock page is `/usr/share/lomiri-system-settings/qml-plugins/brightness/PageComponent.qml` (lomiri-system-settings `1.3.2+0~20260808143253.1`, sha256 `c7bd6ca8…`).
+  - `/usr/share/stone/settings/brightness-PageComponent.qml` is that page plus one `Loader` for `/usr/share/stone/settings/RefreshRate.qml`.
+  - `display-setup.sh` bind-mounts the copy over the stock page at boot, only when the checksum matches. After a package update the section is simply missing, and the journal says why.
+- **The backend.** `RefreshRate.qml` uses pyotherside (`qml-module-io-thp-pyotherside`, installed system-wide) with `/usr/share/stone/settings/refresh_rate.py`.
+  - The helper reads `/etc/stone/refresh-rate`, and the panel's current mode through `display-mode.py get`.
+  - It writes requests (`<60|120> <save|restart>`) to `/run/stone-refresh-rate/request`. The directory is `0770 root:phablet`, from `usr/lib/tmpfiles.d/stone-refresh-rate.conf`.
+- **The root side.** `stone-refresh-rate.path` (`PathChanged=`) starts `stone-refresh-rate-request.service`, which runs `/usr/lib/stone/refresh-rate-request.sh` as root. The script checks the request, then saves it or runs `stone-refresh-rate <rate> --restart-display`.
+- lomiri-system-settings runs unconfined (no AppArmor profile), and the section is in its own file.
+
+Live test (2026-11-11, user):
+- The section appears.
+- 60 Hz with "Restart display now" works, without flicker.
+- Back to 120 Hz with "At next restart": the caption showed the pending change, and the reboot came up at 120 Hz.
+- **After that reboot the section was gone.**
+  - Cause: init installs the overlay with `cp -R /stone-rootfs/. /newroot/` on every boot. The flashed image (`675fd590…`) still carried the older `display-setup.sh`, which overwrote the live-installed one and has no Settings step.
+  - All the section's files are in the new image (`0ea13aae…`), so it now persists.
+
+### Events
+
+- 2026-11-11: user report (no 60/120 switch, not 120 Hz smooth). Measured: panel at 120 Hz, frames at 60.
+  - Found the system compositor's present-fence wait and tested it removed (runtime bind mount, `tools/phone-debug/stone-fps-nowait.sh`): 104–116 fps for a test app, the app drawer still at 60.
+  - Clock A/B and comparison: the GPU governor is the second limit (`mod_percent=200`: 96–100 fps).
+  - Wrote the display-config client, the switch and the boot fix; the live install is ready (`stone-display-install.sh`).
+  - Live install and reboot: 120 Hz works (user). A 60 Hz boot flickers: the panel's 60 Hz command is never sent after continuous splash. Kernel patch 0008 written; kernel `#15` built. Image `675fd590…` written: 60 Hz without flicker, 120 Hz fine (user).
+  - Added the refresh rate section to System Settings > Brightness. Live test passed, except that it disappeared after a reboot (the older image's overlay replaced the setup script). Image `0ea13aae…` built with all of it.
