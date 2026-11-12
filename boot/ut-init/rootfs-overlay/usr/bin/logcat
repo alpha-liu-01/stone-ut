@@ -1,0 +1,14 @@
+#!/bin/sh
+# Android's logcat from Ubuntu Touch (docs/roadmap-release.md item 15).
+#
+# logd runs in the Android container and treats a reader with a uid of 10000
+# or more as an app that needs the user's consent, which it asks Android's
+# framework for. Halium has no framework, so the request never returns and
+# logd deadlocks: no Android logging at all until logd is restarted
+# (stone-logd-watchdog does that). phablet is uid 32011, so only root may read.
+if [ "$(id -u)" -ne 0 ]; then
+    echo "logcat: reading Android's log needs root on Ubuntu Touch; use: sudo logcat $*" >&2
+    echo "        (as an ordinary user, logd waits for Android's consent dialog and hangs)" >&2
+    exit 1
+fi
+exec /system/bin/logcat "$@"

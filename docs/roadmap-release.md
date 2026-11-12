@@ -51,6 +51,7 @@ Checked 2026-11-11 for this document:
 12. Security: AppArmor D-Bus and socket mediation in the kernel.
 13. Bluetooth: turning Bluetooth off and on, and reconnecting.
 14. System journal: the start of every boot is lost.
+15. Android log (logcat) reads back empty.
 
 ## 1. Recovery
 
@@ -657,6 +658,78 @@ Test of `663a4d80…` (2026-11-12):
 - After one more reboot: boot −1 (the first boot of `663a4d80…`) has **4027 entries, from "Journal started" at 3.17 s to "Journal stopped" at its shutdown (203 s), no 1970 entries**. Boot 0 starts at 3.11 s, and the guard caught time_daemon again.
 
 Item 14 is done. `out/halium14/boot-ut-test-clock.img` (`663a4d80…`) is the current image, written and confirmed. It is built from the current sources and includes the Bluetooth work of item 13 (`d9184e3c…`, whose own file is kept as `out/halium14/boot-ut-d9184e3c.img`).
+
+## 15. Android log (logcat) reads back empty
+
+Since item 13, `logcat` printed nothing: as phablet, as root from the host, and as root through `lxc-attach`, which still worked for the GNSS debugging on 2026-11-11.
+
+What is seen (2026-11-12, image `663a4d80…`):
+- logd runs (`init.svc.logd=running`, `logd.ready=true`, uid 1036). `/dev/socket/logd`, `logdr` (both `srw-rw-rw-`) and `logdw` (`s-w--w--w-`) exist on the host, the same sockets as in the container. Properties: `ro.logd.kernel=true`, `logd.logpersistd.enable=true`, `ro.debuggable=1`, `userdebug`.
+- As phablet (which has group `android_log`, AID 1007): `logcat -d -t 3` gives rc 0 and nothing. A line written with `/system/bin/log -t stonetest` is not read back. `logcat -g`: "failed to get the readable 'main,system,crash,kernel' log sizes".
+- **The container has its own PID namespace**: logd is pid 1593 on the host and 452 inside (`NSpid: 1593 452`). logd checks a client's credentials by `SO_PEERCRED`, and its supplementary groups through `/proc/<pid>/status`. A host process's pid cannot be mapped into the container's namespace, so logd sees pid 0 and cannot find phablet's `log` group. That explains `-g` failing for phablet.
+- It does not explain root reading nothing, even inside the container. Next: `tools/phone-debug/stone-logcat-check.sh` (root) collects:
+  - logd's statistics (`logcat -S`);
+  - a test line written and read back inside the container, and one from the host;
+  - logd's open sockets;
+  - the logpersist files in `/data/misc/logd`;
+  - the log properties.
+  It writes everything to `/home/phablet/logcat-check.txt`.
+
+Result of the check (root):
+- Inside the container as root: `logcat -d` gives nothing; `logcat -S` "Failed to read data"; `logcat -g` fails too. A line written with `log` inside the container is not read back. `/data/misc/logd` is empty.
+- logd's fds 26–28 are the three sockets init created at boot (the socket files' inodes are 28555/28557/28559). fd 29 is `/proc/kmsg` (`ro.logd.kernel=true`).
+
+**logd is wedged** (probes as phablet, 2026-11-12):
+- Thread context switches before and after a write, a read and `logcat -g`: `logd.writer` 5612 → 5612; `logd.control` 4 → 4 (it has handled nearly nothing since boot); `logd.klogd` 6478 → 6478, although the kernel logs constantly; only `logd.reader` moved. All threads are in `S`.
+- Raw sockets (Python): `connect()` to `/dev/socket/logd` and `logdr` fails with `EAGAIN`. For Unix sockets that means a full listen backlog: nobody accepts. A datagram to `logdw` times out: its receive queue is full and nobody reads.
+- So logd's threads no longer service their sockets, which looks like a deadlock in logd. A guess: the clock jumps of item 14 (logd starts at 6.4 s; then time_daemon goes back 56 years and the guard forward again; before item 14 there were more jumps).
+- Next: `tools/phone-debug/stone-logd-debug.sh` (root) saves the thread states, `/proc/<tid>/stack` and `debuggerd -b` for logd, then restarts logd and checks reading and writing. Output in `/home/phablet/logd-debug.txt`.
+
+Result of `stone-logd-debug.sh` (2026-11-12):
+- **A deadlock.** `logd.writer`, `logd.control` and `logd.klogd` all wait in `futex_wait` on the same address, `0x558069e600` (`FUTEX_WAIT_BITSET_PRIVATE`, value 2 = a locked, contended mutex, no timeout). It is in logd's own data segment, most likely its global `logd_lock`.
+  - `logd.reader` waits with a timeout on another futex (a condition variable), and the main thread is in `sigsuspend` (normal).
+  - No thread holds the lock in a way that ends. `debuggerd -b` printed nothing, so there are no user-space stacks.
+- `ss`: logd's control socket had 5 connections stuck in `SYN-SENT` (the full backlog).
+- **`setprop ctl.restart logd` fixes it**: `logcat -d` returns lines, a test line reads back, and `logcat -g` shows the 256 KiB buffers. 13 minutes later the new logd (pid 11223) still answers `getLogSize` (262144), takes writes, and all its threads are moving.
+- The boot instance had wedged early: `logd.control` had only 4 context switches since boot. Suspected trigger: the clock jumps at boot (logd starts at 6.4 s; time_daemon sets 1970 at about 14 s; the guard sets 2026 right after).
+- Test: `tools/phone-debug/stone-logd-clock-test.sh` (root) probes logd, sets the clock back to the raw RTC (January 1970) as time_daemon does, lets the guard correct it, and probes again; it restarts logd if it wedged.
+- Result: **the clock is not the trigger.** logd was already wedged *before* the jump. It was the instance restarted at 00:47, which still answered at about 00:49. It stayed wedged after the jump, and a restart fixed it again.
+- New suspect: **a reader on the host side.**
+  - Between 00:49 and the test, the only unusual access was a `/system/bin/logcat -d` run from the host as phablet, in the same health check.
+  - Earlier in that boot, the first command of `stone-logcat-check.sh` was a host-side `logcat -d` as root.
+  - A host process is pid 0 in logd's PID namespace, and the deadlock fits logd's reader setup: `logd.reader` is in a timed wait, while writer, control and klogd wait on the same lock.
+  - Host-side writes, which Halium processes do all the time through libhybris' liblog, are unlikely: logd would wedge right after every restart.
+- Test: `tools/phone-debug/stone-logd-trigger-test.sh` (root). Each step starts from a freshly restarted logd, does one kind of host access (write, `getLogSize`, `logcat -d`; as root and as phablet), and checks logd from inside the container with `logcat -g`.
+
+Result (2026-11-12), one fresh logd per step:
+
+| Host access | logd afterwards |
+|---|---|
+| nothing (2 s idle) | ok |
+| write (`log`), root / phablet | ok / ok |
+| `getLogSize` on `/dev/socket/logd`, root / phablet | ok / ok |
+| `logcat -d`, root | ok |
+| **`logcat -d`, phablet** | **wedged** |
+| `logcat -d` inside the container, root | ok |
+
+- **Only an unprivileged reader wedges logd.** Every empty log in items 2, 13 and 15 followed a `/system/bin/logcat` run as phablet over adb earlier in the same boot; logd was never stuck from boot by itself.
+- With primary group `android_log` (1007, via `sg`), phablet's `logcat -d` still hung logd. So it is not the group check (the PID 0 problem only hides phablet's supplementary groups). **It is the uid.**
+  - Android 13+ logd exempts readers below `AID_APP_START` (10000) from the user-consent check for log access. Root and system services are exempt; phablet (32011) counts as an app.
+  - For an app, logd asks the framework's `LogcatManagerService` for consent. Halium runs no framework, so the request never returns, and logd deadlocks: `logd.reader` keeps waiting with a timeout, while the writer, control and klogd threads wait on its main lock.
+  - The logd binary is not readable as phablet, so this is read from the behaviour rather than from its code.
+- Fix:
+  - **`usr/bin/logcat`**: as root, it execs `/system/bin/logcat`. Otherwise it refuses with an explanation ("reading Android's log needs root on Ubuntu Touch; use: sudo logcat …"). Nothing on the host had a `logcat` in `PATH` before.
+  - **`usr/lib/stone/logd-watchdog.py`**, `stone-logd-watchdog.service` (after `lxc-android-config`): every 30 s it sends a root `getLogSize` to `/dev/socket/logd`, which is safe (see the table). After two failures in a row it runs `lxc-attach -n android -- setprop ctl.restart logd` and logs the result. This covers `/system/bin/logcat` run directly, or anything else that wedges logd.
+  - A restart empties logd's in-memory buffers. The lines lost are the ones logd never took while wedged anyway.
+  - A stub `LogcatManagerService` that declines or approves at once (via gbinder, like `stone-netd-stub`) would remove the deadlock itself. It is not needed for now.
+- Live install: `tools/phone-debug/stone-logd-fix-install.sh`.
+- Live test (2026-11-12):
+  - logd was wedged by the `sg` test. The watchdog started at 01:01:52, and at 01:03:01 logged "logd did not answer twice; restarted it: logd answers again". The new logd started at 01:02:57.
+  - Half a minute later it answered `getLogSize` (262144), and its writer and klogd threads were moving.
+  - `logcat -d -t 3` as phablet: the wrapper's message, exit code 1, and logd stays healthy.
+  - `sudo logcat -d -t 5` printed the last lines (main and kernel buffers); logd stayed the same process and kept answering.
+
+**Image** `out/halium14/boot-ut.img` SHA256 `92c0d49f9a8ecbe73456d5c9b35e6327f59bb4e2263e75f2a2dcc690b4a12a48` (copy `out/halium14/boot-ut-92c0d49f.img`), kernel `#18`. It is `663a4d80…` (kept as `out/halium14/boot-ut-663a4d80.img`) plus `usr/bin/logcat` and the logd watchdog, all byte-identical to the tested copies. Not yet written.
 
 ## Sources
 
