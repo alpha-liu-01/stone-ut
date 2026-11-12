@@ -410,6 +410,33 @@ What is seen: not tested (`docs/roadmap-hardware.md` item 7). The flash shares T
 
 Skipped (2026-11-11): the user reports these already work well. No changes.
 
+### Flashlight toggle (2026-11-12)
+
+User report: the battery indicator has no Flashlight switch (a Nothing Phone on 24.04 has one there); the flash works in the camera app.
+
+What is seen:
+- `ayatana-indicator-power` 24.5.2 shows the switch only when one of its backends finds a torch:
+  - **sysfs:** a list of LED class paths (`/sys/class/leds/torch-light/brightness`, `led:torch_0`, …), or the deviceinfo key `FlashlightSysfsPath` (plus `FlashlightSimpleEnableValue`/`DisableValue`);
+  - **camera HAL** (`FlashlightBackend: camera-hal`, `flashlight-binder.c`): the AIDL camera provider `android.hardware.camera.provider.ICameraProvider/internal/0` on `/dev/binder`.
+- **Neither fits this phone.**
+  - `/sys/class/leds` has only `mmc0::`, `mmc1::` and `vibrator`. The flash is an I2C LED driver on the camera control bus (`qcom,cci0:qcom,camera-flash@0..2`), driven only through the camera stack.
+  - The vendor's manifest has only the HIDL provider, `android.hardware.camera.provider@2.4::ICameraProvider/legacy/0` (`vendor.camera-provider-2-4`).
+- The HIDL provider works from the Ubuntu side (python-gbinder on `/dev/hwbinder`, even as phablet):
+  - `isSetTorchModeSupported()` (code 4) returns true;
+  - `getCameraIdList()` (3) returns `device@3.5/legacy/0` and `…/1`;
+  - `getCameraDeviceInterface_V3_x()` (6), then `ICameraDevice@3.2::setTorchMode()` (3) on camera 0, returns OK for on and off.
+
+Fix: a bridge from the indicator's file backend to the HAL's torch mode.
+- `stone.yaml`: `FlashlightSysfsPath: /run/stone-torch/torch`, `FlashlightSimpleEnableValue: "1"`, `FlashlightSimpleDisableValue: "0"`. The indicator `fopen()`s the file, writes the value and closes it.
+- `usr/lib/stone/torch.py`, `stone-torch.service` (root, before lightdm):
+  - creates the file (0664 root:phablet, the indicator runs as phablet);
+  - watches its directory with inotify (`IN_CLOSE_WRITE`);
+  - calls `setTorchMode` on the first camera that accepts it, remembers that camera, and reconnects to the provider on errors;
+  - logs every refusal with its status (`CAMERA_IN_USE` while the camera app is open);
+  - turns the torch off when stopped.
+- First live test: the switch appeared but did nothing ("no camera accepted setTorchMode"). python-gbinder's `read_hidl_string_vec()` returns the list itself, not `(ok, value)` like the other readers, so the service iterated over a camera name's characters. Fixed. Run directly, the fixed code switched camera 0 on and off (OK, OK).
+- Second live test (`tools/phone-debug/stone-torch-install.sh`, runtime unit): the user confirmed the Flashlight switch turns the torch on and off.
+
 ## 6. Power
 
 Goal: the phone suspends when the screen is off, standby drain is reasonable, and Settings shows the battery level and health.

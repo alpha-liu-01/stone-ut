@@ -612,6 +612,22 @@ Planned steps:
     - Fresh-install path: with the handler copy, `apns-conf.xml` and the stamp deleted, a restart of the service logged "patched copy regenerated" and "apndb: regenerated (302/500: kept 4 gid=55 entries, dropped 4 others)". The files are again `bdecab37…` (mode 755) and `292b93a8…`.
     - A test call offered the earpiece/speaker switch (user).
 
+2026-11-12, step 2 (`tools/phone-debug/stone-apt-upgrade.sh`, root; output in `/home/phablet/apt-upgrade/`):
+- `apt-get full-upgrade` (with `--force-confold`) exited 0, and `dpkg --audit` is clean. 16 of 18 packages were upgraded:
+  - glibc, perl, gstreamer base, libsoup;
+  - bluebinder: an opt-in supported-commands override (`BLUEBINDER_LOCAL_SUPPORTED_COMMANDS_LE_ADD`, not set here);
+  - ofono-binder-plugin and libofonobinderpluginext: azkali's "Reinstate screen-off indication filter", which stops signal and network indications while the screen is off.
+- `distro-info` and `python3-distro-info` were held back ("2 not upgraded"; no error, apparently Ubuntu's phased updates).
+- The apt hook did its job unattended: it lifted both display bind mounts before dpkg, restored them after, and reported the one watched package that changed (`ofono-binder-plugin`).
+- After a reboot the user found everything working.
+- `tested-versions.txt` was regenerated from the upgraded phone. `bluebinder` and `libofonobinderpluginext` were added to the watch list (25 packages).
+- Before the upgrade: the UBports packages can be rolled back (the repository keeps old versions); most of the Ubuntu ones cannot (only the current versions are in the archive, except glibc's).
+
+**Image** `out/halium14/boot-ut.img` SHA256 `3cdee49b2e411e6014bc86469f473108d50c7a818685c4dca2a27c161a18714f` (copy `boot-ut-3cdee49b.img`), kernel `#20`.
+- It is `82f5c1d5…` plus the flashlight toggle (`docs/roadmap-hardware-2.md` item 5: `torch.py`, `stone-torch.service`, the deviceinfo keys) and the new `tested-versions.txt`.
+- Kernel and recovery identical; `torch.py`, the unit and `stone.yaml` byte-identical to the tested ones.
+- Not yet written.
+
 ## 8. UBports Installer
 
 Goal: install with the UBports Installer, as on the OnePlus 6T.

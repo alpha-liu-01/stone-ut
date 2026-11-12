@@ -17,7 +17,7 @@ Tested on one `sunstone_cn` unit (Redmi Note 12 5G, China) in November 2026.
 - calls and SMS on both SIM slots, mobile data, VoLTE, MMS (also over Wi-Fi);
 - Wi-Fi; Bluetooth, including audio, wideband calls and auto-reconnect;
 - wired headsets (3.5 mm and USB), in-call volume;
-- cameras, hardware video decoding;
+- cameras (with flash), the flashlight toggle, hardware video decoding;
 - sensors, GNSS, fingerprint unlock;
 - USB (MTP, adb), microSD, IR emitter;
 - offline charging, recovery (Volume Up + Power).

@@ -1,0 +1,18 @@
+[Unit]
+Description=Flashlight for the battery indicator, through the camera HAL's torch mode
+# See /usr/lib/stone/torch.py. The indicator only offers the toggle when
+# /run/stone-torch/torch exists, so create it before the session starts.
+After=local-fs.target
+Before=lightdm.service display-manager.service
+
+[Service]
+RuntimeDirectory=stone-torch
+RuntimeDirectoryMode=0755
+# Written by ayatana-indicator-power, which runs as phablet.
+ExecStartPre=/usr/bin/install -m 0664 -o root -g phablet /dev/null /run/stone-torch/torch
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/torch.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
