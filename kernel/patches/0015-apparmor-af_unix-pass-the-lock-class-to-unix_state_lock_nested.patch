@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 12:00:00 -0500
+Subject: [PATCH] apparmor: af_unix: pass the lock class to
+ unix_state_lock_nested()
+
+In this 5.4.283 tree, unix_state_lock_nested() takes a lock class
+(enum unix_socket_lock_class, from a stable backport). The af_unix
+mediation patch keeps its own copy of unix_state_double_lock() from older
+kernels and no longer builds. Pass U_LOCK_SECOND, as net/unix/af_unix.c
+does for the second socket.
+---
+diff --git a/security/apparmor/af_unix.c b/security/apparmor/af_unix.c
+--- a/security/apparmor/af_unix.c
++++ b/security/apparmor/af_unix.c
+@@ -580,10 +580,10 @@
+ 	}
+ 	if (sk1 < sk2) {
+ 		unix_state_lock(sk1);
+-		unix_state_lock_nested(sk2);
++		unix_state_lock_nested(sk2, U_LOCK_SECOND);
+ 	} else {
+ 		unix_state_lock(sk2);
+-		unix_state_lock_nested(sk1);
++		unix_state_lock_nested(sk1, U_LOCK_SECOND);
+ 	}
+ }
+ 
+--
+

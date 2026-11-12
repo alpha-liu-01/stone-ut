@@ -11,7 +11,7 @@ ticks() { [ -n "$1" ] && awk '{print $14+$15}' /proc/$1/stat 2>/dev/null || echo
 total() { awk '/^cpu /{print $2+$3+$4+$7+$8}' /proc/stat; }
 echo "time mediahub_ms c2_ms player_ms allcpu_ms" > "$OUT/cpu.log"
 while [ "$(date +%s)" -lt "$END" ]; do
-    MH=$(pgrep -f /usr/lib/stone/media-hub-server | head -1)
+    MH=$(pgrep -f "media-hub-server$" | head -1)
     C2=$(pgrep -f vendor.qti.media.c2 | head -1)
     PL=$(pgrep -f lomiri-mediaplayer-app | head -1)
     a=$(ticks "$MH"); b=$(ticks "$C2"); c=$(ticks "$PL"); t=$(total)

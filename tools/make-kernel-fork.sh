@@ -15,6 +15,12 @@
 # patch headers (the fragment commit takes the date of the fragment's last
 # change in this repository), so the same inputs always give the same hashes.
 # Nothing is pushed.
+#
+# The branch is regenerated: a new patch goes before the fragment commit, so
+# the new branch does not fast-forward the published one. The tags are the
+# permanent references (each published branch tip has one), so the branch is
+# force-updated, with a lease on the previous release's tag:
+#   git push --force-with-lease=stone-ut:refs/tags/<previous tag> <fork URL> stone-ut <tag>
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 KSRC="$ROOT/third_party/android_kernel_xiaomi_sm6375"
@@ -60,4 +66,4 @@ EOF
 [ -z "$TAG" ] || git -C "$DIR" tag -f "$TAG" >/dev/null
 git -C "$DIR" log --oneline "$BASE..HEAD"
 echo "branch stone-ut at $(git -C "$DIR" rev-parse HEAD)${TAG:+, tag $TAG}"
-echo "To publish: git -C $DIR push <fork URL> stone-ut${TAG:+ $TAG}"
+echo "To publish: git -C $DIR push --force-with-lease=stone-ut:refs/tags/<previous tag> <fork URL> stone-ut${TAG:+ $TAG}"

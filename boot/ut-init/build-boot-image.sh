@@ -82,17 +82,6 @@ if [ -f "$APNDB_SRC" ]; then
 else
     echo "warning: $APNDB_SRC missing; Fizz SIMs will be provisioned as Videotron" >&2
 fi
-# media-hub aborts on the empty AppArmor label this kernel produces; ship the
-# patched copy that etc/systemd/user/media-hub.service.d runs instead.
-MEDIA_HUB_SRC=${MEDIA_HUB_SRC:-"$OUT/rootfs-tree/usr/bin/media-hub-server"}
-if [ -f "$MEDIA_HUB_SRC" ]; then
-    python3 -I "$ROOT/tools/patch-media-hub.py" "$MEDIA_HUB_SRC" \
-        "$STAGE/root/stone-rootfs/usr/lib/stone/media-hub-server"
-    chmod 755 "$STAGE/root/stone-rootfs/usr/lib/stone/media-hub-server"
-else
-    echo "error: $MEDIA_HUB_SRC missing; media-hub drop-in would point at nothing" >&2
-    exit 1
-fi
 # telephony-service only knows the droid card's port names; ship the copy
 # that matches the UCM ports, started by usr/lib/stone/telephony-service-handler.sh.
 TELEPHONY_SRC=${TELEPHONY_SRC:-"$OUT/rootfs-tree/usr/bin/lomiri-telephony-service-handler"}

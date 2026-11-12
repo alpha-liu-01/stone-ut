@@ -33,28 +33,28 @@ need() {
     done
 }
 
-# 0 if the kernel tree is exactly KERNEL_COMMIT plus kernel/patches/*.patch,
-# 1 if it is the clean commit, 2 for anything else. Compares git trees in
-# temporary indexes; the work tree is not touched.
-kernel_tree_state() {
+# Prints how many of kernel/patches/*.patch (in order) the kernel tree has:
+# the tree must be exactly KERNEL_COMMIT plus the first N patches. Prints
+# "none" if it matches no such state, "broken" if the patches do not apply.
+# Compares git trees in temporary indexes; the work tree is not touched.
+kernel_patches_applied() {
     tmp=$(mktemp -d)
     (
         cd "$KSRC"
-        GIT_INDEX_FILE="$tmp/patched" git read-tree "$KERNEL_COMMIT"
-        for p in "$ROOT"/kernel/patches/*.patch; do
-            GIT_INDEX_FILE="$tmp/patched" git apply --cached "$p" || exit 3
-        done
-        want=$(GIT_INDEX_FILE="$tmp/patched" git write-tree)
         GIT_INDEX_FILE="$tmp/now" git read-tree "$KERNEL_COMMIT"
         GIT_INDEX_FILE="$tmp/now" git add -A .
         now=$(GIT_INDEX_FILE="$tmp/now" git write-tree)
-        clean=$(git rev-parse "$KERNEL_COMMIT^{tree}")
-        [ "$now" = "$want" ] && exit 0
-        [ "$now" = "$clean" ] && exit 1
-        exit 2
-    ) && rc=0 || rc=$?
+        GIT_INDEX_FILE="$tmp/p" git read-tree "$KERNEL_COMMIT"
+        n=0
+        [ "$now" = "$(GIT_INDEX_FILE="$tmp/p" git write-tree)" ] && found=0 || found=none
+        for p in "$ROOT"/kernel/patches/*.patch; do
+            GIT_INDEX_FILE="$tmp/p" git apply --cached "$p" 2>/dev/null || { echo broken; exit 0; }
+            n=$((n + 1))
+            [ "$now" = "$(GIT_INDEX_FILE="$tmp/p" git write-tree)" ] && found=$n
+        done
+        echo "$found"
+    )
     rm -rf "$tmp"
-    return "$rc"
 }
 
 kmake() { # output-dir make-args...
@@ -73,18 +73,22 @@ build_kernel() {
     [ -d "$KSRC/.git" ] || die "kernel source missing; run sh tools/fetch-inputs.sh kernel"
     [ "$(git -C "$KSRC" rev-parse HEAD)" = "$KERNEL_COMMIT" ] || die "$KSRC is not at $KERNEL_COMMIT"
 
-    kernel_tree_state && st=0 || st=$?
-    case "$st" in
-    0) echo "kernel: patches already applied" ;;
-    1)
-        echo "kernel: applying kernel/patches"
+    total=$(ls "$ROOT"/kernel/patches/*.patch | wc -l)
+    have=$(kernel_patches_applied)
+    case "$have" in
+    broken) die "kernel/patches do not apply to $KERNEL_COMMIT" ;;
+    none) die "$KSRC has changes that are not kernel/patches; stash or remove them" ;;
+    "$total") echo "kernel: all $total patches applied" ;;
+    *)
+        echo "kernel: $have of $total patches applied; applying the rest"
+        i=0
         for p in "$ROOT"/kernel/patches/*.patch; do
+            i=$((i + 1))
+            [ "$i" -gt "$have" ] || continue
             git -C "$KSRC" apply "$p"
             echo "  ${p##*/}"
         done
         ;;
-    3) die "kernel/patches do not apply to $KERNEL_COMMIT" ;;
-    *) die "$KSRC has changes that are not kernel/patches; stash or remove them" ;;
     esac
 
     # moonstone_defconfig plus the Halium fragment, generated in a scratch

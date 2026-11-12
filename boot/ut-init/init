@@ -160,6 +160,8 @@ for f in \
     usr/lib/stone/usb-typec-kick.sh \
     usr/lib/stone/call-audio-watch.sh \
     usr/lib/stone/speaker-route.sh \
+    etc/systemd/user/media-hub.service.d/zz-stone-unconfined.conf \
+    usr/lib/stone/media-hub-server \
     ; do
     rm -f "/newroot/$f"
 done

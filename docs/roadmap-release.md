@@ -381,7 +381,7 @@ What is seen: the boot image contains:
 - busybox (GPL-2.0, `third_party/busybox-aarch64`);
 - the overlay. Its programs, with their sources:
   - biometryd and its library (GPL-3.0/LGPL-3.0): built by `tools/biometryd/build.sh` from upstream plus a patch;
-  - the patched UBports binaries built by `build-boot-image.sh` (telephony-service handler, media-hub, Halium's `libaudioclient.so`): patch scripts in `tools/`, applied to exact upstream versions;
+  - the patched UBports binaries built by `build-boot-image.sh` (telephony-service handler, Halium's `libaudioclient.so`; media-hub until item 12): patch scripts in `tools/`, applied to exact upstream versions;
   - the runtime-patched Mir platform: `display-setup.sh`, with the source patch in `tools/upstream/`.
 
 Planned steps:
@@ -423,9 +423,9 @@ Candidates, from the hardware documents:
 | Fix | Upstream | Present here as |
 | --- | --- | --- |
 | HWC2 present-fence wait (120 Hz) | mir-android2-platform | runtime binary patch; `tools/upstream/mir-android2-platform-0001-*.patch` |
-| AppArmor label by pid when D-Bus has none | biometryd (and a 24.04-2.x release of biometryd main) | rebuilt daemon; `tools/biometryd/` |
+| AppArmor label by pid when D-Bus has none | biometryd (and a 24.04-2.x release of biometryd main). Since item 12 D-Bus has the label here, so the fallback is no longer needed on this port. Upstream it only for kernels without mediation, or just ask for a 24.04-2.x release of biometryd main (the HIDL/AIDL backend). | rebuilt daemon; `tools/biometryd/` |
 | Port names (`output-earpiece` …) | lomiri-telephony-service: make the port names configurable | binary patch (`tools/patch-telephony-ports.py`) |
-| Empty AppArmor label → "unconfined" | media-hub | binary patch (`tools/patch-media-hub.py`) |
+| ~~Empty AppArmor label → "unconfined"~~ | media-hub. **Dropped** (item 12): with labels the stock binary works; the patch is in `archive/`. | none |
 | `releaseAudioSessionId` hang | Halium (`libaudioclient` without AudioFlinger) | binary patch (`tools/patch-libaudioclient.py`) |
 | mSBC through Enhanced Setup (kernels < 5.14) | Halium/UBports kernel patch collections; any QCOM SCO-over-PCM port | `kernel/patches/0009` |
 | First refresh-rate command after continuous splash | crDroid kernel (`dsi_panel.c`) | `kernel/patches/0008` |
@@ -565,6 +565,52 @@ What is seen (`docs/roadmap-hardware-2.md` item 8):
 Planned steps:
 1. Find the AppArmor backport other 5.4 Halium kernels use, and apply it as a kernel patch.
 2. Check that `features/dbus` appears and that dbus-daemon then mediates, and test confined apps (Morph, camera, OpenStore apps) for new denials.
+
+### Implementation notes
+
+2026-11-12. Doing this before item 5 was the user's call: two of item 5's fixes (media-hub, biometryd) only exist because of this gap.
+
+- **The kernel's AppArmor was mainline 5.4.** No `af_unix.c`, no `features/dbus` or `features/network`. `SO_PEERSEC` on the bus sockets failed with `ENOPROTOOPT` ("Protocol not available"). `GetConnectionCredentials` had no `LinuxSecurityLabel`.
+- **Source of the backport:** UBports' own Fairphone 5 kernel (`kernel-fairphone-qcm6490`, `halium-11.0`, also msm 5.4) carries four patches on top of mainline AppArmor. They are now `kernel/patches/0011`–`0014`, with their original authors and dates:
+  - `0011` UBUNTU: SAUCE: add/use fns to print hash string hex value (John Johansen);
+  - `0012` UBUNTU: SAUCE: patch to provide compatibility with v2.x net rules (John Johansen);
+  - `0013` UBUNTU: SAUCE: af_unix mediation (John Johansen). Adds `network/af_unix`, unix socket peer labels for `SO_PEERSEC`, and `features/dbus` (`mask: acquire send receive`), which tells dbus-daemon to mediate;
+  - `0014` forward-port of `query_label` from AppArmor 3.0rc (Alfred Neumayer; fixed Gallery thumbnails on FP5).
+  - All four apply cleanly to our tree after `0010`.
+- **`0015` (ours):** in this 5.4.283 tree `unix_state_lock_nested()` takes a lock class (`enum unix_socket_lock_class`, a stable backport). `0013`'s private copy of `unix_state_double_lock()` was written for the old signature and did not compile. It now passes `U_LOCK_SECOND`, as `net/unix/af_unix.c` does.
+- `build.sh` now accepts a kernel tree with the first N patches applied and applies the rest. It took this machine's tree from 10 to 15.
+- **Kernel `#20`**: `#20 SMP PREEMPT Thu Nov 12 11:19:54 EST 2026`, the first built as `stone@stone-ut`. Image SHA256 `97d7776bc20569dda1108ae406a3d7003b402e7f3137887cd159d448f541e6c2`, kept as `out/halium14/Image-20`. The AppArmor files built without warnings.
+- **Check:** `tools/phone-debug/stone-apparmor-check.sh`, run with sudo:
+  - it reports the features, `SO_PEERSEC` on both buses, the confined services' D-Bus credentials, the confined processes and the policy cache;
+  - it counts the kernel denials from `dmesg`, because `journalctl -k` has no kernel entries on this phone, even for root;
+  - it counts the D-Bus denials from the journals;
+  - the phablet parts go through `setpriv`. `runuser` opened a PAM session that kept `adb shell -t` from returning. Under `sudo` the session still stays open after the script ends, so the script prints a "done" line to the tty, after which Ctrl+C is safe.
+- **Live test** (test image `boot-ut-test-aa.img`, `9f0b20f2…`): the user tested calls, SMS, camera, Gallery, Music, ringtone preview, Morph, GasTube, content sharing, fingerprint unlock, File Manager and notifications. Nothing broke.
+  - Features: `dbus` (mask `acquire send receive`), `network` (`af_mask`, `af_unix`), `network/af_unix: yes`.
+  - `SO_PEERSEC` on the system and session bus sockets: `unconfined` (dbus-daemon's label). `GetConnectionCredentials` of mission-control now includes `LinuxSecurityLabel` `/usr/lib/telepathy/mission-control-5 (enforce)`.
+  - The policy cache was recompiled for the new feature set (`/var/cache/apparmor/e10c1cf9.0`).
+  - **D-Bus denials:** 11, all the same: apps (Messaging, Music, Morph, Camera, Gallery) calling `com.lomiri.libertine.Service.Operations.list` on the session bus. No policy in `/usr/share/apparmor/easyprof` or the abstractions allows libertine, so it is denied by design, and the apps work.
+  - **Kernel denials:** 180. Nearly all are file `open`s (`trace_marker`, CPU sysfs, `gpu_model`, the Qt shader cache, `/etc/ubuntu-touch-session.d/android.conf`, `loginuid`), a class that was already enforced before. The baseline's 0 most likely means the ring buffer had already lost them (23,500 lines after 30 minutes). The only new class: `mediascanner-extractor` `sendmsg` to `/dev/socket/logdw`, Android's log socket reached through libhybris. It only loses log lines.
+- **media-hub back to stock:**
+  - Our drop-in ran `/usr/lib/stone/media-hub-server`. The stock profile `/etc/apparmor.d/usr.bin.media-hub-server` attaches by path, so that copy ran unconfined.
+  - With a test drop-in in `~/.config/systemd/user/` (`ExecStart=/usr/bin/media-hub-server`), the stock binary ran as `/usr/bin/media-hub-server (enforce)`.
+  - It saw real caller labels (`music.ubports_music_3.3.0`, `unconfined` for Settings). The user confirmed ringtone preview, Music, and video in Gallery and GasTube.
+  - Its only denials: two `Introspect` calls (on `com.canonical.Unity.Screen` and `com.lomiri.Repowerd`), plus dconf and `trace_marker` reads.
+  - So the workaround is removed from the image:
+    - `tools/patch-media-hub.py` and the drop-in moved to `archive/`;
+    - `build-boot-image.sh` no longer builds the copy;
+    - `init`'s cleanup list removes the old drop-in and `/usr/lib/stone/media-hub-server` from the rootfs;
+    - `tools/phone-debug/media-hub-profile.sh` and `media-cpu-sample.sh` find media-hub under either path.
+- biometryd's `/proc` fallback is no longer needed either; the rebuilt daemon stays for its HIDL backend (item 5's table).
+- **Image** `out/halium14/boot-ut.img` SHA256 `ca678721ec4c82cf79ee0d6c64555a08567a7a9b5aafdf2c045e9f4ccde04aea` (copy `boot-ut-ca678721.img`), kernel `#20`. Compared with the tested `9f0b20f2…`: the same kernel and recovery; the media-hub drop-in and binary are gone; `init` has the two cleanup lines. Written and confirmed on 2026-11-12:
+  - kernel `#20` running, with `features/dbus` present;
+  - `/usr/lib/stone/media-hub-server` removed by `init` (the emptied `/etc/systemd/user/media-hub.service.d/` directory stays; harmless);
+  - after the test drop-in was deleted, media-hub runs `/usr/bin/media-hub-server` with no drop-ins, as `/usr/bin/media-hub-server (enforce)`.
+- The test drop-in `~/.config/systemd/user/media-hub.service.d/zz-zz-stone-test.conf` was deleted on 2026-11-12.
+- **Kernel fork:** branch `stone-ut` is now patches `0001`–`0015`, tag `boot-ca678721` = `e0144c10e252262c32c66aac064f8345aa2f3ad4`. The tree before the fragment commit equals this machine's kernel tree that built `#20` (`a8d99f58…`). `boot-16bfa7b0` (`48801191…`, `0001`–`0010`) is kept as a tag. Published at `https://github.com/alpha-liu-01/android_kernel_xiaomi_sm6375` (the user's fork):
+    - `boot-16bfa7b0` and the first `stone-ut` (`48801191`) were pushed first; `boot-ca678721` followed on 2026-11-12.
+    - The new `stone-ut` was rejected as non-fast-forward, because `0011`–`0015` go before the fragment commit, so every release regenerates the branch. The tags are the permanent references; the old tip stays reachable as `boot-16bfa7b0`.
+    - The branch is therefore force-updated with a lease on the previous tag: `git -C third_party/android_kernel_xiaomi_sm6375 push --force-with-lease=stone-ut:refs/tags/boot-16bfa7b0 https://github.com/alpha-liu-01/android_kernel_xiaomi_sm6375.git stone-ut`. `tools/make-kernel-fork.sh` now prints this form.
 
 ## 13. Bluetooth: power off and reconnect
 

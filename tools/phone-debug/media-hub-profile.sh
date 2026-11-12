@@ -30,7 +30,7 @@ done
 echo "$(date +%T) decoding started; settling 8 s" >> "$R"
 sleep 8
 
-MH=$(pid_of '[/]usr/lib/stone/media-hub-server')
+MH=$(pid_of '[m]edia-hub-server')
 PL=$(pid_of '[l]omiri-mediaplayer-app')
 snap() {
     for p in "$MH" "$PL" "$C2"; do

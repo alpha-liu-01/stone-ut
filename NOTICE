@@ -55,8 +55,8 @@ but it combines the following with the files above:
 - UBports' unified recovery ramdisk for Halium 14 (various licences, mostly
   Apache-2.0 and GPL);
 - patched copies of UBports binaries, made at build time from the exact
-  package versions in the Ubuntu Touch root filesystem: media-hub-server
-  (LGPL-3.0), lomiri-telephony-service-handler (GPL-3.0), and Halium's
+  package versions in the Ubuntu Touch root filesystem:
+  lomiri-telephony-service-handler (GPL-3.0) and Halium's
   libaudioclient.so (Apache-2.0); and hci_vhci.ko from the kernel (GPL-2.0).
 
 tools/fetch-inputs.sh lists where each input comes from, pinned by SHA256.

@@ -2,7 +2,7 @@
 
 Every binary that goes into the boot image (`out/halium14/boot-ut.img`) or the root filesystem image (`out/halium14/userdata-ut.img`), with its upstream source, its exact version and its licence. The licence texts are in [LICENSE](LICENSE) (GPL-3.0) and [licenses/](licenses/). [NOTICE](NOTICE) covers this repository's own files.
 
-Checked for boot image `16bfa7b0…` (kernel `#18`), 2026-11-12. Update this file when an input changes.
+Checked for boot image `ca678721…` (kernel `#20`, patches `0001`–`0015`), 2026-11-12. Update this file when an input changes.
 
 ## Boot image
 
@@ -10,8 +10,8 @@ Checked for boot image `16bfa7b0…` (kernel `#18`), 2026-11-12. Update this fil
 
 - **Licence:** GPL-2.0 ([licenses/GPL-2.0.txt](licenses/GPL-2.0.txt)).
 - **Base:** crDroid's [android_kernel_xiaomi_sm6375](https://github.com/crdroidandroid/android_kernel_xiaomi_sm6375), branch `14.0`, commit `42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d`.
-- **Changes:** [kernel/patches/](kernel/patches/) (`0001`–`0010`), and [kernel/config/halium-sunstone.fragment](kernel/config/halium-sunstone.fragment) merged on top of `moonstone_defconfig`.
-- **As a git branch:** `sh tools/make-kernel-fork.sh DIR boot-16bfa7b0` makes the branch `stone-ut`: the base, one commit per patch, and a commit adding the fragment. The hashes are reproducible; the tip is `4880119163f88ac5a62aa1a1a020fded1b870413`.
+- **Changes:** [kernel/patches/](kernel/patches/) (`0001`–`0015`; `0011`–`0014` are Ubuntu's and UBports' AppArmor patches with their original authors), and [kernel/config/halium-sunstone.fragment](kernel/config/halium-sunstone.fragment) merged on top of `moonstone_defconfig`.
+- **As a git branch:** `sh tools/make-kernel-fork.sh DIR boot-<image>` makes the branch `stone-ut`: the base, one commit per patch, and a commit adding the fragment. The hashes are reproducible. Tags: `boot-ca678721` (kernel `#20`, patches `0001`–`0015`) is `e0144c10e252262c32c66aac064f8345aa2f3ad4`; `boot-16bfa7b0` (kernel `#18`, `0001`–`0010`) is `4880119163f88ac5a62aa1a1a020fded1b870413`.
 - **Build:** `sh build.sh kernel` (clang/lld 21, binutils from gcc 13.3.0).
 - **Module:** `hci_vhci.ko` (`drivers/bluetooth/hci_vhci.c`, which no patch changes) comes from the same build directory.
 
@@ -40,7 +40,6 @@ Made at build time from the exact binaries of the root filesystem below. Each pa
 
 | Shipped as | Upstream package and version | Licence | Patch |
 |---|---|---|---|
-| `/usr/lib/stone/media-hub-server` | `media-hub` 4.7~20260611100903.31~3b69471+ubports24.04.2 | LGPL-3.0 | [tools/patch-media-hub.py](tools/patch-media-hub.py) |
 | `/usr/bin/lomiri-telephony-service-handler-stone` | `lomiri-telephony-service` 0.6.2+0~20260728091107.2+ubports24.04.2~1.gbp0e2982 | GPL-3.0 | [tools/patch-telephony-ports.py](tools/patch-telephony-ports.py) |
 | `/usr/share/halium-overlay/android/system/lib64/libaudioclient.so` | Halium 14 system image below (`/system/lib64/libaudioclient.so`) | Apache-2.0 | [tools/patch-libaudioclient.py](tools/patch-libaudioclient.py) |
 
