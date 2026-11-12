@@ -1,0 +1,8 @@
+// stone (docs/roadmap-release.md item 7):
+// - before dpkg: remove display-setup's bind mounts, or dpkg cannot replace
+//   the Mir platform library or the Settings brightness page (EBUSY);
+// - after dpkg: mount them again if the installed files are still the known
+//   builds, regenerate the patched telephony handler and the APN database
+//   from what is now installed, and report what an upgrade changed.
+DPkg::Pre-Invoke { "if [ -f /usr/lib/stone/display-setup.sh ]; then /bin/sh /usr/lib/stone/display-setup.sh unmount; fi; true"; };
+DPkg::Post-Invoke { "if [ -f /usr/lib/stone/display-setup.sh ]; then /bin/sh /usr/lib/stone/display-setup.sh mounts; fi; if [ -f /usr/lib/stone/update-fixups.py ]; then /usr/bin/python3 -I /usr/lib/stone/update-fixups.py apply --apt; fi; true"; };

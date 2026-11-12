@@ -53,6 +53,7 @@ Checked 2026-11-11 for this document:
 14. System journal: the start of every boot is lost.
 15. Android log (logcat) reads back empty.
 16. Top panel: an indicator sits on the front camera.
+17. Unofficial distribution: publish the port without waiting for UBports' approval.
 
 ## 1. Recovery
 
@@ -545,6 +546,11 @@ Planned steps:
 2. Map `rootfs-overlay` onto a device tarball. The hash-gated runtime patches stay as boot-time scripts.
 3. Decide, with the user. Moving gives UBports CI, OTA and installer support "for free", but changes the partition layout, so it means one reinstall. Staying means items 7 and 8 are this repository's own work.
 
+**Decision (2026-11-12, the user): stay with this layout.**
+- Moving mainly pays off for OTA through UBports' system-image server and a standard installer flow. Both need UBports' approval and infrastructure, and the move costs every user one reinstall.
+- Staying keeps the rootfs-on-userdata layout, our initramfs and the overlay. Item 7 (updates) and item 17 (distribution) are this repository's own work.
+- Revisit if UBports shows interest in hosting the port. Steps 1 and 2 above (initramfs comparison, device-tarball mapping) are only needed then.
+
 ## 7. Updates
 
 Goal: the phone can be updated safely, first with apt, later through Settings → Updates.
@@ -561,6 +567,50 @@ Planned steps:
 1. Do the "Deferred: system updates" list: patch at boot from whatever binary is installed, and add a check after an upgrade.
 2. Run `apt full-upgrade` once on the test phone and verify the hardware checklist.
 3. After item 6: CI building the device tarball and the boot images; then ask UBports for a `devel` channel.
+
+### Implementation notes
+
+2026-11-12, step 1. The list in `docs/roadmap-hardware.md` ("Deferred: system updates") predated several fixes. Current inventory:
+
+| Piece | Before | After a package update (before this step) |
+|---|---|---|
+| Telephony handler with UCM port names | patched copy built into the image | stock handler (wrapper's hash check): calls work, no earpiece/speaker choice |
+| APN database with the MVNO rule | generated into the image | stale copy; new carriers missed |
+| Mir 120 Hz patch, Settings refresh-rate page | bind mounts made at boot, hash-gated | **dpkg fails** (see below) |
+| biometryd | our build via a drop-in | keeps running ours |
+| Vendor fixups, `libaudioclient` | vendor partition / Halium image | not touched by apt |
+
+- **New bug found: an `apt` upgrade of the bind-mounted files fails.**
+  - dpkg installs a file by renaming the new one over the path, and a rename onto a mount point fails with `EBUSY`. Tested on the phone in an unprivileged user namespace: "[Errno 16] Device or resource busy".
+  - Only two files are mounted over: `graphics-android2.so.16` (`mir1-platform-graphics-android2-16`) and `PageComponent.qml` (`lomiri-system-settings`). An update of either package would have aborted the upgrade.
+- **Fix:**
+  - `usr/lib/stone/update-fixups.py`:
+    - `apply` regenerates the patched handler (`/usr/bin/lomiri-telephony-service-handler-stone`, only for the known build; otherwise the stale copy is removed) and `/usr/share/stone/apns-conf.xml` from the installed lineageos-apndb. It does nothing when a stamp in `/var/lib/stone/` shows them current.
+    - `check` reports, and covers the display patches and the watched package versions (`usr/share/stone/tested-versions.txt`, 23 packages, the versions on the phone on 2026-11-12).
+  - The MVNO rules are now a config file: `usr/share/stone/apndb-mvno.conf` (default `302 500 gid 55`), overridable by `/etc/stone/apndb-mvno.conf`, which the overlay does not replace.
+  - `stone-update-fixups.service` runs `apply` at boot, before ofono and lightdm.
+  - `etc/apt/apt.conf.d/99stone-update-fixups`:
+    - `DPkg::Pre-Invoke`: `display-setup.sh unmount` (lazy unmount of both copies);
+    - `DPkg::Post-Invoke`: `display-setup.sh mounts` (re-binds only if the files are still the known builds), then `update-fixups.py apply --apt` (quiet unless something is off).
+  - `build-boot-image.sh` no longer builds those two files; it ships `patch-telephony-ports.py` and `apndb-prefer-mvno.py` in `usr/lib/stone/`. The boot image no longer needs `rootfs-tree` for them.
+- **First live test: Lomiri restarted.** `display-setup.sh mounts` wrote the new patched copy with `cp` over `/run/stone-display/graphics-android2.so.16`, the file the running compositor had mapped. The compositor crashed at 16:16:28 (that second the file was written), and Lomiri restarted. The session's USB reconnect then dropped adb, and the hang-up stopped the test before apt ran (dpkg's log was unchanged).
+  - Fix: build the copy as `….new`, then `mv` it into place; the running compositor keeps the old inode.
+  - The test ignores SIGHUP and checks the compositor's pid.
+- **Second live test** (`tools/phone-debug/stone-update-fixups-test.sh`, root), all passed, Lomiri untouched:
+  1. `check` / `apply`: the regenerated `apns-conf.xml` was byte-identical to the image's (`292b93a8…`; "302/500: kept 4 gid=55 entries, dropped 4 others"), the handler copy matched `bdecab37…`, and a second `apply` reported everything current.
+  2. `unmount` / `mounts`: compositor pid 56141 before and after.
+  3. `apt-get install --reinstall mir1-platform-graphics-android2-16` (the same version) through apt:
+     - the hook unmounted both copies, dpkg unpacked and set up the package (`ii`), and the hook re-bound both;
+     - the active library is the patched `bc58bdfd…`; pid 56141 unchanged;
+     - `update-fixups.py apply --apt` printed nothing (all current).
+  - apt reported 18 packages not upgraded: the input for step 2.
+- **Image** `out/halium14/boot-ut.img` SHA256 `82f5c1d50980b08bf0c5bc92e6b121004c12a3240d119761cb2159691a3b1fb4` (copy `boot-ut-82f5c1d5.img`), kernel `#20`.
+  - Compared with `ca678721…`: kernel and recovery identical. Added: the apt hook, the service and its link, `update-fixups.py`, the two patch tools, `apndb-mvno.conf`, `tested-versions.txt`. Changed: `display-setup.sh`, the ofono drop-in comment. No longer shipped: the handler copy and `apns-conf.xml` (now generated on the phone).
+  - All new files are byte-identical to the tested ones.
+  - Written and confirmed on 2026-11-12:
+    - `stone-update-fixups.service` finished at 13.3 s, before ofono (13.4 s) and lightdm (16.9 s). `check` reports everything current, the display patches are active, and the hook and the new `display-setup.sh` are in place.
+    - Fresh-install path: with the handler copy, `apns-conf.xml` and the stamp deleted, a restart of the service logged "patched copy regenerated" and "apndb: regenerated (302/500: kept 4 gid=55 entries, dropped 4 others)". The files are again `bdecab37…` (mode 755) and `292b93a8…`.
+    - A test call offered the earpiece/speaker switch (user).
 
 ## 8. UBports Installer
 
@@ -951,6 +1001,27 @@ Live test (2026-11-12): the yaml was copied to `/etc/deviceinfo/devices/stone.ya
 - At 95 px: the right height.
 
 **Image** `out/halium14/boot-ut.img` SHA256 `2edde0c6b6ca88b9a07577fae6ce2034dd39aba419ebd9d94f444137055ad8ba` (copy `out/halium14/boot-ut-2edde0c6.img`), kernel `#18`. It is `92c0d49f…` (item 15) plus the new `stone.yaml`, byte-identical to the tested copy. The kernel and all other ramdisk files are the same; the recovery ramdisk has the same files, only repacked. Never written: `16bfa7b0…` (item 3) includes it and was written on 2026-11-12.
+
+## 17. Unofficial distribution
+
+Goal: people can install, update and get the sources of the port without anyone at UBports approving anything.
+
+Which steps need UBports (decided 2026-11-12, with the user):
+- **Not needed:** item 6 (staying with this layout), item 7 steps 1 and 2 (apt-safe updates), a public repository, releases, the install guide, and an installer config run with `ubports-installer --file`.
+- **Needed:** a place in UBports' community-ports group (item 6), an OTA channel on UBports' system-image server (item 7 step 3), a listing in `installer-configs` (item 8), and a page on devices.ubuntu-touch.io (item 9). These become optional later steps.
+- **The merges from item 5:** nothing here depends on them. Every upstreamed fix has a working downstream workaround; merges only reduce maintenance. No UBports policy on AI-assisted contributions was found (docs, contribution files, web search, 2026-11-12). Other projects range from outright bans (Redox, COSMIC) to disclosure rules (Drupal).
+
+Planned steps:
+1. Item 7 step 1 (patches from whatever is installed, and a check after upgrades), then step 2 (one tested `apt full-upgrade`).
+2. Make the repository public. Item 3 removed the personal data and rewrote the history. The old remote history still has to be replaced (force-push, or a fresh public repository).
+3. GitHub releases, each with:
+   - `boot-ut.img`, the userdata image (compressed) and SHA256SUMS;
+   - the kernel fork tag of that image (item 4);
+   - `LICENSE`, `licenses/`, `NOTICE` and `SOURCES.md` next to the images.
+4. Updates for users: flash the new boot image (the overlay is reapplied on boot), plus apt once item 7 step 1 is done. Note in each release whether the userdata image changed (normally not).
+5. Optional: `stone.yml` for `ubports-installer --file`, from `docs/install.md`.
+6. Announce it: a thread in the UBports forum's ports section, linking the install guide, the known issues and where to report problems.
+7. Later, optional: items 8 and 9. The device page accepts a port with a "manual install" link. The installer's standard flow uses system-image, which this port does not, so a `installer-configs` entry needs custom steps or item 6's move.
 
 ## Sources
 

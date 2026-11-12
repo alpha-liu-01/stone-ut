@@ -1,0 +1,23 @@
+# Package versions the port was tested with (docs/roadmap-release.md item 7).
+# update-fixups.py reports packages whose installed version differs.
+ayatana-indicator-sound 24.5.3-1ubports1~20260911184727.1~ed446d5+ubports24.04.2
+biometryd-bin 0.4.0+0~20260423213326.36+ubports24.04.2~1.gbp816029
+bluez 5.85-4ubports1+0~20260518172433.7+ubports24.04.2~1.gbp60bb89
+libbiometry2 0.4.0+0~20260423213326.36+ubports24.04.2~1.gbp816029
+libgbinder 1.1.52-0ubports1~20260911100623.2~d4855b1+ubports24.04.2
+libhybris 0.1.0+git20260624+7079712-0ubports1+0~20261028125224.2+ubports24.04.2~1.gbp37a1b3
+libsensorfw-qt5-hidl 0.15.1+really0.15.1-0ubports1+0~20260511065435.4+ubports24.04.2~1.gbp5adfe6
+lineageos-apndb 23.2+20260416+f418ba7-1ubports1+0~20260429063154.8+ubports24.04.2~1.gbp7d1a09
+lomiri-system-settings 1.3.2+0~20260808143253.1+ubports24.04.2~1.gbp2f4654
+lomiri-telephony-service 0.6.2+0~20260728091107.2+ubports24.04.2~1.gbp0e2982
+lxc-android-config 1.1+0~20261028124925.9+ubports24.04.2~1.gbp4f6036
+media-hub 4.7~20260611100903.31~3b69471+ubports24.04.2
+mir1-platform-graphics-android2-16 1.8.0~20260320103600.20~72f96d2+ubports24.04.2
+nuntium 2.2~20250821145130.16~50804a6+ubports~dev
+ofono-binder-plugin 1.1.33-0ubports1+0~20260917165048.4+ubports24.04.2~1.gbp33c120
+ofono-binder-plugin-ext-qti 0.0.1-0ubports1~20261023134024.3~b63b0c6+ubports24.04.2
+ofono-sailfish 1.29+git12-0ubports1~20260512073109.25~cc444e3+ubports24.04.2
+ofono-sailfish-apndb-plugin 0.20230719~20260330221020.5~8585296+ubports24.04.2
+pulseaudio 1:16.1+dfsg1-2ubuntu10.1ubports1+0~20261008092456.3+ubports24.04.2~1.gbpe0c6e8
+sensorfw-qt5 0.15.1+really0.15.1-0ubports1+0~20260511065435.4+ubports24.04.2~1.gbp5adfe6
+usb-moded 0.86.0+mer69-0ubports1+0~20260316041145.24+ubports24.04.2~1.gbp098e3a

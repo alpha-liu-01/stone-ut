@@ -1,0 +1,14 @@
+[Unit]
+Description=Regenerate stone's patched telephony handler and APN database from the installed packages
+# See /usr/lib/stone/update-fixups.py. Before ofono (it provisions from the
+# APN database) and before the user session (the telephony handler).
+After=local-fs.target
+Before=ofono.service lightdm.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/update-fixups.py apply
+
+[Install]
+WantedBy=multi-user.target

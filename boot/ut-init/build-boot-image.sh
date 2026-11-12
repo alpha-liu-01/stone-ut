@@ -70,31 +70,12 @@ if [ -f "$VHCI" ]; then
     mkdir -p "$STAGE/root/stone-rootfs/usr/lib/modules/stone"
     cp "$VHCI" "$STAGE/root/stone-rootfs/usr/lib/modules/stone/hci_vhci.ko"
 fi
-# ofono's apndb provisioning ignores mvno_type, so a Fizz SIM (302/500,
-# GID1 55) gets Videotron's APNs. Ship a copy of the rootfs apndb where the
-# Fizz entries are the plain 302/500 entries; ofono.service.d/zz-stone-apndb
-# points OFONO_SYSTEM_APNDB_PATH at it. Generated, not committed.
-APNDB_SRC=${APNDB_SRC:-"$OUT/rootfs-tree/usr/share/lineageos-apndb/apns-conf.xml"}
-if [ -f "$APNDB_SRC" ]; then
-    mkdir -p "$STAGE/root/stone-rootfs/usr/share/stone"
-    python3 -I "$ROOT/tools/apndb-prefer-mvno.py" "$APNDB_SRC" \
-        "$STAGE/root/stone-rootfs/usr/share/stone/apns-conf.xml" 302 500 gid 55
-else
-    echo "warning: $APNDB_SRC missing; Fizz SIMs will be provisioned as Videotron" >&2
-fi
-# telephony-service only knows the droid card's port names; ship the copy
-# that matches the UCM ports, started by usr/lib/stone/telephony-service-handler.sh.
-TELEPHONY_SRC=${TELEPHONY_SRC:-"$OUT/rootfs-tree/usr/bin/lomiri-telephony-service-handler"}
-if [ -f "$TELEPHONY_SRC" ]; then
-    # Must be in /usr/bin (see usr/lib/stone/telephony-service-handler.sh).
-    mkdir -p "$STAGE/root/stone-rootfs/usr/bin"
-    python3 -I "$ROOT/tools/patch-telephony-ports.py" "$TELEPHONY_SRC" \
-        "$STAGE/root/stone-rootfs/usr/bin/lomiri-telephony-service-handler-stone"
-    chmod 755 "$STAGE/root/stone-rootfs/usr/bin/lomiri-telephony-service-handler-stone"
-else
-    echo "error: $TELEPHONY_SRC missing; telephony handler drop-in would point at nothing" >&2
-    exit 1
-fi
+# The patched telephony handler (UCM port names) and the APN database with
+# the MVNO rules are generated on the phone from the installed packages, at
+# boot and after every dpkg run (usr/lib/stone/update-fixups.py), so a package
+# update cannot leave stale copies behind. Ship the two patch tools for it.
+install -m 644 "$ROOT/tools/patch-telephony-ports.py" "$STAGE/root/stone-rootfs/usr/lib/stone/patch-telephony-ports.py"
+install -m 644 "$ROOT/tools/apndb-prefer-mvno.py" "$STAGE/root/stone-rootfs/usr/lib/stone/apndb-prefer-mvno.py"
 # camera_service hangs releasing a video recorder (AudioSystem waits forever
 # for an AudioFlinger this system does not have); the patched libaudioclient
 # is bind-mounted over the Android system's copy by mount-halium-overlay.

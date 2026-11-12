@@ -47,13 +47,18 @@ patch_compositor() {
         return
     fi
     mkdir -p "$RUN"
-    cp "$LIB" "$RUN/graphics-android2.so.16"
-    printf '\001\000\200\122' | dd of="$RUN/graphics-android2.so.16" bs=1 seek=$PATCH_OFFSET conv=notrunc status=none
-    if [ "$(sha256sum < "$RUN/graphics-android2.so.16" | cut -d' ' -f1)" != "$PATCHED_SHA" ]; then
+    # Build the copy under a new name and rename it into place: when this
+    # runs again after a dpkg run, the running compositor still has the old
+    # copy mapped, and rewriting that file in place crashes it.
+    new="$RUN/graphics-android2.so.16.new"
+    cp "$LIB" "$new"
+    printf '\001\000\200\122' | dd of="$new" bs=1 seek=$PATCH_OFFSET conv=notrunc status=none
+    if [ "$(sha256sum < "$new" | cut -d' ' -f1)" != "$PATCHED_SHA" ]; then
         log "compositor: patched copy has the wrong checksum; not used"
-        rm -f "$RUN/graphics-android2.so.16"
+        rm -f "$new"
         return
     fi
+    mv -f "$new" "$RUN/graphics-android2.so.16"
     mount --bind "$RUN/graphics-android2.so.16" "$LIB" && log "compositor: present-fence wait removed"
 }
 
@@ -95,8 +100,38 @@ settings_page() {
     mount --bind "$PAGE_COPY" "$PAGE" && log "settings: refresh rate section added to Brightness"
 }
 
-patch_compositor
-gpu_governor
-refresh_rate
-settings_page
+# dpkg replaces a file by renaming a new one over it, and a rename onto a
+# mount point fails (EBUSY): with these bind mounts in place, an upgrade of
+# mir1-platform-graphics-android2-16 or lomiri-system-settings would abort.
+# /etc/apt/apt.conf.d/99stone-update-fixups calls "unmount" before dpkg runs
+# and "mounts" afterwards, which binds the copies again only when the newly
+# installed files are still the builds they were made from. The running
+# compositor and Settings keep what they loaded until they restart.
+unmount() {
+    for f in "$LIB" "$PAGE"; do
+        while mountpoint -q "$f"; do
+            umount -l "$f" && log "unmounted the copy over $f"
+        done
+    done
+}
+
+case "${1:-boot}" in
+boot)
+    patch_compositor
+    gpu_governor
+    refresh_rate
+    settings_page
+    ;;
+mounts)
+    patch_compositor
+    settings_page
+    ;;
+unmount)
+    unmount
+    ;;
+*)
+    echo "usage: $0 [boot|mounts|unmount]" >&2
+    exit 1
+    ;;
+esac
 exit 0

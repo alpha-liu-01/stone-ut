@@ -28,7 +28,7 @@ Tested on one `sunstone_cn` unit (Redmi Note 12 5G, China) in November 2026.
 - No over-the-air updates yet. Some fixes patch specific binaries of the root filesystem and check their hash first; an `apt` upgrade of those packages has not been tested (roadmap item 7).
 - `adbd` sometimes crashes during `adb push` of directories or many files in a row; it restarts by itself after about 40 s.
 - The Android Bluetooth HAL died once while Bluetooth was off; not reproduced.
-- Mobile data APNs for MVNOs that are recognised by IMSI or GID1 are not chosen automatically: ofono's APN provisioning cannot see those SIM fields on this ofono variant ([ofono-apndb-plugin#2](https://gitlab.com/ubports/development/core/ofono-apndb-plugin/-/work_items/2)). `build-boot-image.sh` works around it for one carrier (Fizz, 302/500, GID1 55); for another MVNO, change the `apndb-prefer-mvno.py` arguments there, or set the APN in Settings → Mobile network.
+- Mobile data APNs for MVNOs that are recognised by IMSI or GID1 are not chosen automatically: ofono's APN provisioning cannot see those SIM fields on this ofono variant ([ofono-apndb-plugin#2](https://gitlab.com/ubports/development/core/ofono-apndb-plugin/-/work_items/2)). The port works around it for one carrier by default (Fizz, 302/500, GID1 55). For another MVNO, put a line `MCC MNC gid|imsi|spn MATCH_DATA` in `/etc/stone/apndb-mvno.conf` (see `/usr/share/stone/apndb-mvno.conf`) and let ofono provision the SIM anew, or set the APN in Settings → Mobile network.
 
 ### Variants
 
