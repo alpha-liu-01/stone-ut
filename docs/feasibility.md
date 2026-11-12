@@ -1,7 +1,7 @@
 # Feasibility of Droidian / Ubuntu Touch on the Redmi Note 12 5G (sunstone)
 
 
-Probe date: 2026-11-09. Read-only: nothing was flashed and the phone was not rebooted. ADB serial `stone`. The first half used an ordinary `shell`. Partition images and `lpdump` were taken later, after the user authorized Magisk root.
+Probe date: 2026-11-09. Read-only: nothing was flashed and the phone was not rebooted. The first half used an ordinary `adb shell`. Partition images and `lpdump` were taken later, after the user authorized Magisk root.
 
 Reference: `docs/clue.md`. The text below follows it only where this probe and the public device tree agree. Where they disagree, this probe wins.
 

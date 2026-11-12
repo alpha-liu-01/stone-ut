@@ -96,7 +96,13 @@ echo 0x0100 > "$G/bcdDevice"
 echo 0x0200 > "$G/bcdUSB"
 echo stone-ut > "$G/strings/0x409/manufacturer"
 echo boot-log > "$G/strings/0x409/product"
-echo stone > "$G/strings/0x409/serialnumber"
+serial=stone
+for x in $(cat /proc/cmdline 2>/dev/null); do
+    case "$x" in
+    androidboot.serialno=*) serial=${x#*=} ;;
+    esac
+done
+echo "$serial" > "$G/strings/0x409/serialnumber"
 echo logs > "$G/configs/c.1/strings/0x409/configuration"
 echo 120 > "$G/configs/c.1/MaxPower"
 ln -s "$G/functions/acm.GS0" "$G/configs/c.1/" 2>/dev/null || true

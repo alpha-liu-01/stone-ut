@@ -92,7 +92,7 @@ Planned steps:
 
 ### First test (2026-11-11, image `e8ff055e…`)
 
-The user entered the recovery (`sudo reboot recovery` in Ubuntu Touch); `adb devices` showed `stone recovery`. The only visible problem was very small text. Checked over adb (root):
+The user entered the recovery (`sudo reboot recovery` in Ubuntu Touch); `adb devices` showed the phone in recovery. The only visible problem was very small text. Checked over adb (root):
 - `ro.ubuntu.recovery=true`, slot `_b`, kernel `#17`, `sys.usb.controller=4e00000.dwc3`, adbd root, all 91 by-name partitions.
 - Our init logged "recovery boot (no androidboot.force_normal_boot=1)"; Android's init: "First stage mount skipped (recovery mode)". The missing selinuxfs and `/system/build.prop` are harmless.
 - **Display:** 1080 x 2400 @ 120 FPS, mode 0 ("Atomic Commit failed in DisableNonMainCrtcs" refers to secondary outputs the phone does not have).
@@ -232,7 +232,7 @@ What is seen:
 - UBports' `usb-moded.service` sets `Environment=USB_MODED_ARGS=-r`, and ports turn it off from `/etc/default/usb-moded.d/*.conf` (UBports' `device-specific-config.conf`: "Uncomment this to disable usb-moded's rescue mode. Only do this if you're sure your device will boot.").
 - With a cable plugged in when usb-moded starts, rescue mode puts the gadget in `developer_mode` and keeps it there until the cable is unplugged. That mode is RNDIS only: the phone is at `10.15.19.82`, and there is no adb.
 - Boot with the cable in (image `2708ccaf…`, usb-moded running `-r`):
-  - the PC got UBports' RNDIS identity `1209:0004` (`lineage_stone`, serial `stone`) and a "Wired connection" with `10.15.19.2`;
+  - the PC got UBports' RNDIS identity `1209:0004` (`lineage_stone`, the bootloader serial) and a "Wired connection" with `10.15.19.2`;
   - `adb devices` was empty;
   - the phone answered ping on `10.15.19.82`, but ssh is off, so there was no way in.
 - **The Type-C side is fine.** The kernel log of that boot shows `PowerOffCharge`, `Attached.SNK` at 1.7 s, and the gadget `CONFIGURED` at 13 s.
@@ -312,14 +312,8 @@ A different bug, seen while installing this: **adbd sometimes segfaults on `adb 
 Goal: a repository that can be published without personal data, and that someone else can build from.
 
 What is seen (tracked files, 2026-11-11):
-- **Personal data:**
-  - the IMSI of the user's SIM in `docs/roadmap-hardware.md`;
-  - the phone's serial number `stone` in `docs/feasibility.md` and hard-coded as the USB gadget serial in six init scripts (`boot/ut-init/init`, `init-disk`, `init-logs`, `boot/droidian-init/*`), so every phone would claim this unit's serial;
-  - the phone's and the earbuds' Bluetooth addresses in both hardware roadmaps;
-  - the user's email in two patch headers (normal for authored patches; the user's choice).
-
-  Phone numbers and coordinates are only in `out/` (ignored).
-- **History:** all of the above is also in the 21 commits. Publishing this history publishes it, so the history has to be rewritten (or the repository started afresh) before it goes public.
+- **Personal data:** removed from the tree on 2026-11-12. See the notes below. The email in two patch headers was left (normal for authored patches; the user's choice). Phone numbers and coordinates are only in `out/` (ignored).
+- **History:** rewritten in the same pass, so the removed identifiers are not in any commit. The remote still has the old history until it is force-pushed; that push has not been done.
 - **No README, LICENSE or NOTICE files.**
 - **The build depends on files only this machine has:** the crDroid zip, the UBports root filesystem and the Halium image, the unpacked `out/halium14/rootfs-tree`, the kernel tree and the toolchain. All of them sit in ignored folders (47 GB checkout).
 - `boot/droidian-init/` belongs to the abandoned Droidian route (`docs/roadmap-04-05.md`).
@@ -337,6 +331,16 @@ Planned steps:
 
    Then a single build entry point: kernel → root filesystem tree → boot image.
 5. Remove or archive `boot/droidian-init/` and the obsolete debug paths.
+
+### Implementation notes
+
+2026-11-12, steps 1 and 2:
+
+- Docs no longer record the SIM identity, the device serial, or the Bluetooth adapter address (either byte order). No separate earbud address was in the tree; the hardware notes only had the phone adapter.
+- The six init scripts (`boot/ut-init/init`, `init-disk`, `init-logs`, and the three under `boot/droidian-init/`) take the USB gadget serial from `androidboot.serialno` on the kernel command line. If the bootloader does not pass one, the serial is `stone`.
+- History was rewritten with `git filter-repo` so those values are not in any commit. Reflogs were dropped and unreachable objects were pruned. Nothing was pushed. The patch-header email was not changed.
+
+Steps 3 to 5 are not done.
 
 ## 4. Sources the licences require
 

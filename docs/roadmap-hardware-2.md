@@ -754,7 +754,7 @@ First live test (image `9a9590c4…`, kernel `#17`, 2026-11-11): **Bluetooth cal
 - Still open:
   - The ofono hang from the first test (a pending SCO connect, `InProgress` until the earbuds reconnect) has not come back. If it does, `stone-bt-call-debug.sh` captures the HCI trace.
   - Only the Moondrop Nekocake was tested; a headset without wideband speech should negotiate CVSD and get `KHZ_8`.
-- Unrelated observation: after this boot hciconfig shows the adapter address byte-reversed (`redacted`, earlier `redacted`); the paired earbuds still connect.
+- Unrelated observation: after this boot hciconfig shows the adapter address byte-reversed relative to the earlier reading; the paired earbuds still connect.
 
 ### In-call volume (2026-11-11)
 

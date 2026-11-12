@@ -30,7 +30,13 @@ fail() {
     echo 0xa4a7 > "$G/idProduct"
     echo stone-ut > "$G/strings/0x409/manufacturer"
     echo boot-fail > "$G/strings/0x409/product"
-    echo stone > "$G/strings/0x409/serialnumber"
+    serial=stone
+    for x in $(cat /proc/cmdline 2>/dev/null); do
+        case "$x" in
+        androidboot.serialno=*) serial=${x#*=} ;;
+        esac
+    done
+    echo "$serial" > "$G/strings/0x409/serialnumber"
     echo fail > "$G/configs/c.1/strings/0x409/configuration"
     ln -s "$G/functions/acm.GS0" "$G/configs/c.1/" 2>/dev/null
     i=0
