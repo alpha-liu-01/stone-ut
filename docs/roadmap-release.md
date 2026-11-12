@@ -377,7 +377,7 @@ Planned steps:
 Goal: anyone who gets a boot image can get its corresponding source.
 
 What is seen: the boot image contains:
-- the Linux kernel (GPL-2.0), crDroid's tree plus `kernel/patches/0001`–`0009` and `kernel/config/halium-sunstone.fragment`;
+- the Linux kernel (GPL-2.0), crDroid's tree plus `kernel/patches/0001`–`0010` (`0010` since kernel `#18`) and `kernel/config/halium-sunstone.fragment`;
 - busybox (GPL-2.0, `third_party/busybox-aarch64`);
 - the overlay. Its programs, with their sources:
   - biometryd and its library (GPL-3.0/LGPL-3.0): built by `tools/biometryd/build.sh` from upstream plus a patch;
@@ -390,6 +390,29 @@ Planned steps:
 3. Choose a licence for this repository's own scripts. GPL-3.0 matches most UBports components; ask the user.
 
 2026-11-12: step 3 done. The user chose GPL-3.0 (`LICENSE`); `NOTICE` lists the parts under other licences. The input mirror (item 3, step 4) redistributes the UBports rootfs, the Halium image, the recovery ramdisk and busybox. Those carry GPL parts, so their sources have to be offered as well. UBports publishes the package sources; busybox 1.37.0's source and Alpine's build recipe should go with the release.
+
+2026-11-12, steps 1 and 2:
+
+- **Step 1, kernel fork.**
+  - `kernel/patches/0001`–`0010` are now `git format-patch` files: author `alpha-liu-01` with the GitHub noreply address, dated when each patch entered this repository, and each with a commit message. The messages were written from the roadmap entries and checked against the diffs. The diffs are unchanged (same `git patch-id` for all ten), so `build.sh` and `git apply` work as before, and `build.sh` still recognises this machine's tree as "commit plus patches".
+  - `tools/make-kernel-fork.sh DIR [TAG]` makes a worktree of the kernel checkout on the branch `stone-ut`:
+    - base `42e99ef7`;
+    - `git am` of the ten patches (committer = author, committer date = author date);
+    - one commit adding the fragment as `arch/arm64/configs/halium-sunstone.fragment`, dated by the fragment's last change here.
+  - The same inputs give the same hashes: two runs gave tip `4880119163f88ac5a62aa1a1a020fded1b870413`.
+  - The tree before the fragment commit is exactly this machine's patched tree (`49cd98c4…`). That is kernel `#18`'s source: `hci_core.c` (0010) was last changed at 22:04:52, before `#18` was built at 22:05:16. `hci_event.c` is newer only because 0011 was reverted, and the tree still equals commit plus 0001–0010.
+  - The branch `stone-ut` and the tag `boot-16bfa7b0` exist in `third_party/android_kernel_xiaomi_sm6375` only. **Not pushed:** publishing needs a public GitHub fork of `crdroidandroid/android_kernel_xiaomi_sm6375` (forks of public repositories are public), which the user decides.
+  - Tag scheme: `boot-<first 8 hex of the boot image's SHA256>` on the commit whose kernel went into that image.
+- **Step 2, sources and licence texts.**
+  - `SOURCES.md` lists every binary the boot and userdata images ship, with its upstream, exact version, SHA256 and licence: the kernel and `hci_vhci.ko`; busybox; the recovery ramdisk; the three patched UBports binaries; the boot-time Mir patch; biometryd; the copied data files; the rootfs and Halium images.
+  - It also records the CI builds' source revisions, read from Jenkins:
+    - `generic_arm64` `halium-14.0` at `9a95607a…` and `halium-build-tools` at `96088c8f…` (Halium 586/594/596);
+    - `rootfs-builder-debos` at `608c8ff0…` and `build-tools` at `63470907…` (rootfs 154).
+  - busybox r31 is Alpine aports commit `c3ef5d10e6ef…` (pkgrel 31, 2026-01-10, the build date in the binary's banner). `busybox-1.37.0.tar.bz2` matches the SHA512 in its APKBUILD. Both are staged for the `inputs-2026-11` release; not uploaded yet.
+  - `licenses/` holds GPL-2.0, LGPL-3.0 and Apache-2.0 (GPL-3.0 is `LICENSE`); `NOTICE` and the README point to it and to `SOURCES.md`.
+  - Licences checked: `media-hub` LGPL-3.0, `lomiri-telephony-service` GPL-3 (`debian/copyright`); `mir-android2-platform` GPL-3.0/LGPL-3.0, with the patched `real_hwc2_wrapper.cpp` LGPL-3.0.
+  - Found on the way: `usr/share/stone/{audio_policy_configuration,r_submix,tables,volumes,bluetooth}.xml` are no longer used. Their only reference is the commented-out `module-droid-card-28` line in `stone-touch.pa`. They can be removed from the overlay.
+  - The licence texts are not in the boot image itself. A release of the image should carry `LICENSE`, `licenses/`, `NOTICE` and `SOURCES.md` next to it.
 
 ## 5. Upstream the fixes
 

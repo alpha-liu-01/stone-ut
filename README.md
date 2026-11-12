@@ -91,4 +91,4 @@ UBports CI deletes old builds, and Alpine no longer has that busybox revision. S
 
 ## Licence
 
-GPL-3.0 for this repository's own files; see [LICENSE](LICENSE). Kernel patches are GPL-2.0, and other parts keep their own licences; see [NOTICE](NOTICE).
+GPL-3.0 for this repository's own files; see [LICENSE](LICENSE). Kernel patches are GPL-2.0, and other parts keep their own licences; see [NOTICE](NOTICE). [SOURCES.md](SOURCES.md) lists every binary the images ship, with its source.

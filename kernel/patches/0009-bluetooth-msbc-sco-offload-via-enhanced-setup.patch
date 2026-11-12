@@ -1,3 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 16:26:05 -0500
+Subject: [PATCH 09/10] Bluetooth: offload mSBC SCO through Enhanced Setup
+ Synchronous Connection
+
+This controller routes SCO over PCM to the DSP. Wideband (mSBC) calls
+need the codec set up with HCI Enhanced Setup/Accept Synchronous
+Connection, which kernels before 5.14 do not use, so only CVSD
+(narrowband) worked.
+
+Add HCI_OP_ENHANCED_SETUP_SYNC_CONN and HCI_OP_ENHANCED_ACCEPT_SYNC_CONN_REQ
+with their parameter block. For transparent links, when the controller
+supports it and bluetooth.sco_offload_msbc is set (default, writable at
+runtime), set up and accept with Android's values: mSBC on air (8000 B/s,
+60-byte frames), 16-bit linear PCM at 32000 B/s on the PCM data path,
+and packet types, latency and retransmission from the existing T2/T1
+table. CVSD links are unchanged.
+---
+ include/net/bluetooth/hci.h      | 54 +++++++++++++++++++
+ include/net/bluetooth/hci_core.h |  8 +++
+ net/bluetooth/hci_conn.c         | 93 ++++++++++++++++++++++++++++++++
+ net/bluetooth/hci_event.c        | 41 ++++++++++++++
+ net/bluetooth/sco.c              | 12 +++++
+ 5 files changed, 208 insertions(+)
+
 diff --git a/include/net/bluetooth/hci.h b/include/net/bluetooth/hci.h
 index 5bc1e30de..992dc4d2c 100644
 --- a/include/net/bluetooth/hci.h

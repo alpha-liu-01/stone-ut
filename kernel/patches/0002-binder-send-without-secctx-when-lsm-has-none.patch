@@ -1,3 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 19:09:10 -0500
+Subject: [PATCH 02/10] binder: send without a security context when the LSM
+ has none
+
+The vendor servicemanager sets FLAT_BINDER_FLAG_TXN_SECURITY_CTX. On
+this 5.4 kernel with only AppArmor (Halium runs without SELinux),
+security_secid_to_secctx() returns -EINVAL for secid 0 and binder fails
+every vndbinder transaction (29201/-22), so no vendor HAL can register.
+
+When the LSM returns -EINVAL or -EOPNOTSUPP, send the transaction without
+a security context. The receiver gets no SID and falls back to
+getpidcon(), as it does on kernels without the feature.
+---
+ drivers/android/binder.c | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
 diff --git a/drivers/android/binder.c b/drivers/android/binder.c
 index ec18ba16d..48900053c 100644
 --- a/drivers/android/binder.c

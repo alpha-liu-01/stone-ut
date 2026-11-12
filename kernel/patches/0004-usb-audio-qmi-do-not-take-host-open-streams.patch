@@ -1,3 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 15:18:10 -0500
+Subject: [PATCH 04/10] ALSA: usb-audio-qmi: do not take streams the host has
+ open
+
+The USB audio offload service lets the DSP enable a USB stream even while
+the host driver has the same PCM open, and on disable it stops the
+endpoint and selects altset 0 regardless. With PulseAudio playing on the
+USB sink, a short sound routed through the DSP could take the stream away
+and leave USB earphones silent until the stream was reopened.
+
+Refuse an enable with -EBUSY while the host has the PCM open (the DSP
+retries), and only touch the hardware on disable when the offload owns
+the interface; otherwise release only the DSP-side resources. A disable
+for an interface the offload does not own does nothing, which also
+avoids a negative index.
+---
+ sound/usb/usb_audio_qmi_svc.c | 46 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 43 insertions(+), 3 deletions(-)
+
 diff --git a/sound/usb/usb_audio_qmi_svc.c b/sound/usb/usb_audio_qmi_svc.c
 index d72c2e650..987f324d3 100644
 --- a/sound/usb/usb_audio_qmi_svc.c

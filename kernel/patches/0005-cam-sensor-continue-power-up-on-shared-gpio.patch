@@ -1,3 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 17:32:12 -0500
+Subject: [PATCH 05/10] msm: camera: sensor: continue power-up when a shared
+ GPIO is busy
+
+All sensors and the flash use TLMM pin 38 as their VIO enable, which the
+device tree does not mark as shared. Powering up a second camera device
+got -EBUSY on that GPIO, the power-up was aborted, and CamX failed in
+CSLAcquireDevice.
+
+When the GPIO table request fails with -EBUSY, log it and continue, as
+Xiaomi's prebuilt camera.ko does; any other GPIO error still aborts. The
+pin is already driven by its holder, and custom_gpio1_powernum keeps it
+up until the last user powers down.
+---
+ .../cam_sensor_utils/cam_sensor_util.c        | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
 diff --git a/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c b/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c
 index c3aa37eed..29c8f3416 100644
 --- a/techpack/camera/drivers/cam_sensor_module/cam_sensor_utils/cam_sensor_util.c

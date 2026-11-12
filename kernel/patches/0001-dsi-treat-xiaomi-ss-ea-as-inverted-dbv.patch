@@ -1,3 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 16:16:19 -0500
+Subject: [PATCH 01/10] drm/msm/dsi: treat Xiaomi's ss-ea brightness flag as
+ inverted DBV
+
+Xiaomi's device trees mark panels that take the DCS brightness (DBV)
+value big-endian with qcom,mdss-dsi-bl-dcs-type-ss-ea instead of the
+upstream qcom,mdss-dsi-bl-inverted-dbv. Xiaomi's own kernel handles it;
+this tree did not, so the m17 panel of the Redmi Note 12 5G got the bytes
+swapped: most brightness levels were wrong, and the screen went black
+when the lock screen set its first brightness. Accept the ss-ea flag as
+inverted DBV.
+---
+ techpack/display/msm/dsi/dsi_panel.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
 diff --git a/techpack/display/msm/dsi/dsi_panel.c b/techpack/display/msm/dsi/dsi_panel.c
 index 698cc92b5..d95a7ab17 100644
 --- a/techpack/display/msm/dsi/dsi_panel.c

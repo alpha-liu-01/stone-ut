@@ -1,7 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 13:24:50 -0500
+Subject: [PATCH 08/10] drm/msm/dsi: send the refresh-rate command on the first
+ frame
+
+dsi_refresh_flag starts at 60, meaning "the panel runs at 60 Hz". With
+continuous splash the bootloader leaves the panel in its 120 Hz setting
+and dsi_panel_enable() is skipped, so a first frame at 60 Hz never sent
+DISP_BC_60HZ and the panel flickered. Start the flag at 0 (unknown), so
+the first frame always sends the command for its rate.
+---
+ techpack/display/msm/dsi/dsi_panel.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
 diff --git a/techpack/display/msm/dsi/dsi_panel.c b/techpack/display/msm/dsi/dsi_panel.c
+index d95a7ab17..3d49b0c80 100644
 --- a/techpack/display/msm/dsi/dsi_panel.c
 +++ b/techpack/display/msm/dsi/dsi_panel.c
-@@ -3675,7 +3675,13 @@
+@@ -3675,7 +3675,13 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
  	drm_panel_init(&panel->drm_panel);
  	panel->drm_panel.dev = &panel->mipi_device.dev;
  	panel->mipi_device.dev.of_node = of_node;

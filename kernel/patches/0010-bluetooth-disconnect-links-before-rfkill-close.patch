@@ -1,3 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 00:28:10 -0500
+Subject: [PATCH 10/10] Bluetooth: disconnect links before an rfkill block
+ closes the device
+
+hci_rfkill_set_block() calls hci_dev_do_close(), which drops the host's
+connection state without sending HCI Disconnect. With an Android HAL in
+front of the controller (bluebinder), the controller stays powered and
+the remote device stays connected: headphones remained attached after
+Bluetooth was turned off and could not reconnect after it was turned on.
+
+Before closing on an rfkill block, disable scans, send Disconnect
+(Remote Device Terminated Due to Power Off) for every ACL and LE link,
+and wait up to 2 s for them to go; log whether any were left.
+---
+ net/bluetooth/hci_core.c | 45 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 44 insertions(+), 1 deletion(-)
+
 diff --git a/net/bluetooth/hci_core.c b/net/bluetooth/hci_core.c
 index d3862da05..329767fdc 100644
 --- a/net/bluetooth/hci_core.c

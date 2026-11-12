@@ -1,3 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 15:18:10 -0500
+Subject: [PATCH 03/10] ASoC: wcd-mbhc: mirror the jack state into its own ALSA
+ card
+
+The headset jack is only reported as an input device. PulseAudio follows
+ALSA jack controls (UCM JackControl) only, and it cannot load the main
+card's mixer at all: alsa-lib's simple mixer fails on the main card's 151
+vendor controls that cannot be read. So jack controls on the main card
+would not reach it.
+
+At MBHC init, register a second card, "StoneJack", whose only controls
+are "Headphone Jack" and "Headset Mic Jack" on a phantom jack (no second
+input device), and mirror every report from wcd_mbhc_jack_report() into
+it. UCM points JackCTL at hw:StoneJack.
+---
+ techpack/audio/asoc/codecs/wcd-mbhc-v2.c | 57 ++++++++++++++++++++++++
+ 1 file changed, 57 insertions(+)
+
 diff --git a/techpack/audio/asoc/codecs/wcd-mbhc-v2.c b/techpack/audio/asoc/codecs/wcd-mbhc-v2.c
 index 0256f7dbd..208484dd5 100644
 --- a/techpack/audio/asoc/codecs/wcd-mbhc-v2.c

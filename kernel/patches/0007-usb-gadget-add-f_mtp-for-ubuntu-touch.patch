@@ -1,4 +1,8 @@
-usb: gadget: add Android's f_mtp ("mtp" configfs function) for Ubuntu Touch MTP
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 00:11:40 -0500
+Subject: [PATCH 07/10] usb: gadget: add Android's f_mtp ("mtp" configfs
+ function) for Ubuntu Touch MTP
 
 This 5.4 tree has no f_mtp (the Android common kernel dropped it when
 Android moved MTP to userspace over FunctionFS). Ubuntu Touch's mtp-server
@@ -13,6 +17,16 @@ Tx limit (gadget->is_chipidea, a msm-4.19-only field) is removed; this SoC
 uses DWC3. PTP (f_ptp.c) is not added.
 
 Enable with CONFIG_USB_CONFIGFS_F_MTP=y (selects USB_F_MTP).
+---
+ drivers/usb/gadget/Kconfig           |   12 +
+ drivers/usb/gadget/function/Makefile |    2 +
+ drivers/usb/gadget/function/f_mtp.c  | 1915 ++++++++++++++++++++++++++
+ include/linux/usb/f_mtp.h            |   53 +
+ include/uapi/linux/usb/f_mtp.h       |   61 +
+ 5 files changed, 2043 insertions(+)
+ create mode 100644 drivers/usb/gadget/function/f_mtp.c
+ create mode 100644 include/linux/usb/f_mtp.h
+ create mode 100644 include/uapi/linux/usb/f_mtp.h
 
 diff --git a/drivers/usb/gadget/Kconfig b/drivers/usb/gadget/Kconfig
 index 7b0c06ab5..ae5b92a80 100644

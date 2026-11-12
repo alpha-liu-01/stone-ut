@@ -20,7 +20,15 @@ tools/biometryd/biometryd-0001-*.patch
     A change to UBports' biometryd. GPL-3.0 / LGPL-3.0, like biometryd.
 
 tools/upstream/mir-android2-platform-0001-*.patch
-    A change to Mir's android2 platform. Follows that project's licence.
+    A change to UBports' mir-android2-platform (real_hwc2_wrapper.cpp).
+    LGPL-3.0, like that file.
+
+boot/ut-init/rootfs-overlay/usr/share/stone/*.xml
+    Edited copies of Android audio policy files (AOSP, The Linux
+    Foundation). Apache-2.0; each keeps its header.
+
+boot/ut-init/rootfs-overlay/usr/share/stone/settings/brightness-PageComponent.qml
+    Lomiri System Settings' brightness page with a section added. GPL-3.0.
 
 boot/ut-init/rootfs-overlay/usr/lib/stone/biometryd/biometryd
 boot/ut-init/rootfs-overlay/usr/lib/stone/biometryd/libbiometry.so.2
@@ -31,6 +39,10 @@ boot/ut-init/rootfs-overlay/usr/lib/stone/biometryd/libbiometry.so.2
 
 tools/biometryd/ubports.gpg
     UBports' public repository signing key, used to verify packages.
+
+licenses/
+    The texts of the other licences named here (GPL-2.0, LGPL-3.0,
+    Apache-2.0). SOURCES.md lists every distributed binary with its source.
 
 Third-party programs in the built boot image
 --------------------------------------------

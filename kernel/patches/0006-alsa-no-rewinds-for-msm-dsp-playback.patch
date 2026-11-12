@@ -1,3 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <116528196+alpha-liu-01@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 21:11:16 -0500
+Subject: [PATCH 06/10] ALSA: pcm: add SNDRV_PCM_INFO_NO_REWINDS, set it for
+ MSM DSP playback
+
+Backport of Linux 5.17's SNDRV_PCM_INFO_NO_REWINDS: when set,
+rewind_appl_ptr() rewinds nothing. Set it on msm_pcm_hardware_playback
+(all ADSP MultiMedia playback front ends). The DSP has already fetched
+the data PulseAudio tries to rewrite, so rewinds caused audible glitches;
+PulseAudio now queues new data behind what is buffered instead. USB and
+Bluetooth sinks keep their rewinds.
+---
+ include/uapi/sound/asound.h         | 1 +
+ sound/core/pcm_native.c             | 6 ++++++
+ techpack/audio/asoc/msm-pcm-q6-v2.c | 9 +++++++++
+ 3 files changed, 16 insertions(+)
+
 diff --git a/include/uapi/sound/asound.h b/include/uapi/sound/asound.h
 index da8a729a3..36d9c7156 100644
 --- a/include/uapi/sound/asound.h
