@@ -1,0 +1,52 @@
+stone-ut: Ubuntu Touch for the Xiaomi Redmi Note 12 5G / POCO X5 5G (stone)
+
+This repository's own scripts, configuration and documentation are licensed
+under the GNU General Public License, version 3 (see LICENSE), unless a file
+or the list below says otherwise.
+
+Parts with their own licences
+-----------------------------
+
+kernel/patches/*.patch, kernel/config/*
+    Changes to the Linux kernel (crdroidandroid/android_kernel_xiaomi_sm6375,
+    branch 14.0, commit 42e99ef7fcd885b2e8c2ebbc7e0c700f1294c52d).
+    GPL-2.0, like the kernel they apply to.
+
+tools/mkbootimg/mkbootimg.py, tools/mkbootimg/unpack_bootimg.py
+    From AOSP (platform/system/tools/mkbootimg).
+    Copyright The Android Open Source Project. Apache-2.0.
+
+tools/biometryd/biometryd-0001-*.patch
+    A change to UBports' biometryd. GPL-3.0 / LGPL-3.0, like biometryd.
+
+tools/upstream/mir-android2-platform-0001-*.patch
+    A change to Mir's android2 platform. Follows that project's licence.
+
+boot/ut-init/rootfs-overlay/usr/lib/stone/biometryd/biometryd
+boot/ut-init/rootfs-overlay/usr/lib/stone/biometryd/libbiometry.so.2
+    Binaries built by tools/biometryd/build.sh from UBports' biometryd
+    (https://gitlab.com/ubports/development/core/biometryd, commit
+    1005154be01ed2d01f50f8f99fdaaf02cc62077b) plus the patch above.
+    The daemon is GPL-3.0, the library LGPL-3.0.
+
+tools/biometryd/ubports.gpg
+    UBports' public repository signing key, used to verify packages.
+
+Third-party programs in the built boot image
+--------------------------------------------
+
+The boot image (out/halium14/boot-ut.img) is not part of this repository,
+but it combines the following with the files above:
+
+- the Linux kernel built from the tree above with kernel/patches (GPL-2.0);
+- busybox 1.37.0, Alpine busybox-static 1.37.0-r31 for aarch64 (GPL-2.0);
+- UBports' unified recovery ramdisk for Halium 14 (various licences, mostly
+  Apache-2.0 and GPL);
+- patched copies of UBports binaries, made at build time from the exact
+  package versions in the Ubuntu Touch root filesystem: media-hub-server
+  (LGPL-3.0), lomiri-telephony-service-handler (GPL-3.0), and Halium's
+  libaudioclient.so (Apache-2.0); and hci_vhci.ko from the kernel (GPL-2.0).
+
+tools/fetch-inputs.sh lists where each input comes from, pinned by SHA256.
+docs/roadmap-release.md, item 4, tracks the corresponding sources that have
+to be published with a release.

@@ -45,7 +45,7 @@ cp "$ROOT/boot/ut-init/stone-dynparts.py" "$STAGE/root/stone-dynparts.py"
 REC_IN=${RECOVERY_RAMDISK:-"$ROOT/out/recovery/ramdisk-recovery.img"}
 REC_SHA256=c9c32a413b9e23a9b4ec1e0daba4e009ec485404590b74ef93059db22efaca40
 if [ "$MODE" = boot ]; then
-    [ -f "$REC_IN" ] || { echo "error: $REC_IN missing; run tools/fetch-recovery-ramdisk.sh" >&2; exit 1; }
+    [ -f "$REC_IN" ] || { echo "error: $REC_IN missing; run sh tools/fetch-inputs.sh recovery" >&2; exit 1; }
     [ "$(sha256sum < "$REC_IN" | cut -d' ' -f1)" = "$REC_SHA256" ] || {
         echo "error: $REC_IN is not the pinned recovery build" >&2; exit 1; }
     # Every entry in it is root-owned and there are no device nodes, so it
@@ -132,7 +132,7 @@ fi
 if [ "$MODE" = trace ] || [ "$MODE" = disk ]; then
     "$ROOT/third_party/toolchain/gcc-13.3.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc" \
         -nostdlib -static -fno-builtin -O2 -o "$STAGE/root/reboot-bootloader" \
-        "$ROOT/boot/droidian-init/reboot-bootloader.c"
+        "$ROOT/boot/ut-init/reboot-bootloader.c"
     chmod 755 "$STAGE/root/reboot-bootloader"
 fi
 # The Android 14 vendor ramdisk only has first_stage_ramdisk/ and lib/.

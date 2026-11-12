@@ -340,7 +340,37 @@ Planned steps:
 - The six init scripts (`boot/ut-init/init`, `init-disk`, `init-logs`, and the three under `boot/droidian-init/`) take the USB gadget serial from `androidboot.serialno` on the kernel command line. If the bootloader does not pass one, the serial is `stone`.
 - History was rewritten with `git filter-repo` so those values are not in any commit. Reflogs were dropped and unreachable objects were pruned. Nothing was pushed. The patch-header email was not changed.
 
-Steps 3 to 5 are not done.
+2026-11-12, steps 3 to 5:
+
+- **Step 3:** `README.md` (what it is, status, variants, build, layout), `docs/install.md` (crDroid 14 v10.11 first, then `userdata` and `boot`, then `resize2fs`; recovery; going back), `LICENSE` (GPL-3.0, the user's choice; item 4, step 3) and `NOTICE` (the parts with other licences, and what the boot image combines).
+- **Step 4:** `tools/fetch-inputs.sh` fetches and checks every input. `build.sh` is the entry point: `kernel`, then `rootfs`, then `boot`, or `all`.
+  - Pins (SHA256, unchanged from the files used so far):
+    - crDroid zip (SourceForge);
+    - rootfs: UBports CI `ubuntu-touch-rootfs/ubports/24.04-2.x` build 154 (Jenkins' fingerprint of our file);
+    - Halium: `halium-14.0` build 594 (identical to 586, its first build, and to 595–596);
+    - recovery ramdisk: build 596 (identical to 595);
+    - gcc 13.3.0 (kernel.org crosstool);
+    - busybox (Alpine `busybox-static` 1.37.0-r31);
+    - the kernel at `42e99ef7` (a `--depth 1` fetch of the commit, 1.5 GB).
+  - The unpacked `android-rootfs.img` is checked too (`12d1606e…`).
+  - **Upstream does not keep these files.** On 2026-11-12, rootfs build 152 already returned 404 (154 will follow within days), Halium 557 too, and Alpine no longer has busybox r31 (v3.23 has r30, edge 1.38.0).
+    - The script falls back to a GitHub release of this repository, `inputs-2026-11` (`STONE_MIRROR` overrides). It mirrors the rootfs, Halium, the recovery ramdisk and busybox, and accepts any file only if its checksum matches.
+    - `sh tools/fetch-inputs.sh --mirror-files DIR` stages the four assets with a `SHA256SUMS`. The user created the release on 2026-11-12. All four assets, downloaded with `gh release download`, match their SHA256. **The repository is still private**, so the script's anonymous download gets a 404 until it is public; until then a new machine has to fetch busybox with `gh`.
+  - `build.sh kernel`:
+    - Compares the kernel tree with the commit plus `kernel/patches/` (git trees built in temporary indexes, work tree untouched). It applies the patches to a clean checkout, accepts an already patched one (this machine's tree is), and refuses anything else.
+    - Generates `moonstone_defconfig` plus the fragment in a scratch directory and copies it only if it changed.
+    - Builds `Image modules` with clang 21 and `KCFLAGS=-Wno-implicit-enum-enum-cast`.
+  - `tools/fetch-recovery-ramdisk.sh` now calls `fetch-inputs.sh recovery`.
+  - Tested on 2026-11-12:
+    - In an empty directory: the recovery and toolchain downloads, the kernel fetch, and a full kernel build. The patches applied cleanly; `.config` is identical to `kernel/build-14/.config`; the `hci_vhci.ko` vermagic is the same; the Image is 48130560 bytes like `#18`. A second run changed nothing (same Image SHA256).
+    - The busybox download failed as expected (no release yet), with the message to place the file by hand.
+    - In this checkout: `sh build.sh boot` gives `16bfa7b0…`. Its kernel and recovery files are identical to `2edde0c6…` (item 16). Its ramdisk differs only in `init`'s USB serial (steps 1 and 2; the bootloader passes `androidboot.serialno`, checked on the phone).
+  - The kernel banner records the builder (`user@host`). `build.sh` now sets `KBUILD_BUILD_USER=stone` and `KBUILD_BUILD_HOST=stone-ut` (both overridable); checked with a stub `make`. Kernels up to `#18` still carry the old names; the next kernel build is the first without them.
+  - **Image** `16bfa7b0531b411058fde6edaef43400b362b8428d3960cc15786a44c5229ce6` (`out/halium14/boot-ut.img`, copy `boot-ut-16bfa7b0.img`) replaces `2edde0c6…` as the image to flash (the user's choice). Written and confirmed on 2026-11-12: kernel `#18`, `stone.yaml` with the cutout settings, and `/usr/bin/logcat` on the phone.
+- **Step 5:** archived, not deleted (the user's choice). `archive/README.md` explains what is there.
+  - `boot/droidian-init/` → `archive/droidian-init/`, except `reboot-bootloader.c`, which moved to `boot/ut-init/` (the `trace` and `disk` images build it).
+  - The 13 `tools/phone-debug/*-install.sh` live-install scripts and `stone-boot-trace.sh` → `archive/phone-debug/`; their fixes are in the image. The diagnostics stay in `tools/phone-debug/`.
+  - The roadmaps keep the old paths, as a log.
 
 ## 4. Sources the licences require
 
@@ -358,6 +388,8 @@ Planned steps:
 1. Publish a kernel fork: crDroid's commit plus the patches as commits, plus the config fragment. Tag every release with the boot image it went into.
 2. Record each distributed binary's upstream source and version next to it (busybox version, biometryd commit, the UBports package versions the patch scripts check). Add license texts.
 3. Choose a licence for this repository's own scripts. GPL-3.0 matches most UBports components; ask the user.
+
+2026-11-12: step 3 done. The user chose GPL-3.0 (`LICENSE`); `NOTICE` lists the parts under other licences. The input mirror (item 3, step 4) redistributes the UBports rootfs, the Halium image, the recovery ramdisk and busybox. Those carry GPL parts, so their sources have to be offered as well. UBports publishes the package sources; busybox 1.37.0's source and Alpine's build recipe should go with the release.
 
 ## 5. Upstream the fixes
 
@@ -734,7 +766,7 @@ Result (2026-11-12), one fresh logd per step:
   - `logcat -d -t 3` as phablet: the wrapper's message, exit code 1, and logd stays healthy.
   - `sudo logcat -d -t 5` printed the last lines (main and kernel buffers); logd stayed the same process and kept answering.
 
-**Image** `out/halium14/boot-ut.img` SHA256 `92c0d49f9a8ecbe73456d5c9b35e6327f59bb4e2263e75f2a2dcc690b4a12a48` (copy `out/halium14/boot-ut-92c0d49f.img`), kernel `#18`. It is `663a4d80…` (kept as `out/halium14/boot-ut-663a4d80.img`) plus `usr/bin/logcat` and the logd watchdog, all byte-identical to the tested copies. Not yet written.
+**Image** `out/halium14/boot-ut.img` SHA256 `92c0d49f9a8ecbe73456d5c9b35e6327f59bb4e2263e75f2a2dcc690b4a12a48` (copy `out/halium14/boot-ut-92c0d49f.img`), kernel `#18`. It is `663a4d80…` (kept as `out/halium14/boot-ut-663a4d80.img`) plus `usr/bin/logcat` and the logd watchdog, all byte-identical to the tested copies. Never written: `16bfa7b0…` (item 3) includes it and was written on 2026-11-12.
 
 ## 16. Top panel: an indicator sits on the front camera
 
@@ -762,7 +794,7 @@ Live test (2026-11-12): the yaml was copied to `/etc/deviceinfo/devices/stone.ya
 - At 104 px: no indicator on or next to the camera, nothing cut by the corners, and the pulled-down panel also keeps clear. The bar looked too tall.
 - At 95 px: the right height.
 
-**Image** `out/halium14/boot-ut.img` SHA256 `2edde0c6b6ca88b9a07577fae6ce2034dd39aba419ebd9d94f444137055ad8ba` (copy `out/halium14/boot-ut-2edde0c6.img`), kernel `#18`. It is `92c0d49f…` (item 15) plus the new `stone.yaml`, byte-identical to the tested copy. The kernel and all other ramdisk files are the same; the recovery ramdisk has the same files, only repacked. Not yet written.
+**Image** `out/halium14/boot-ut.img` SHA256 `2edde0c6b6ca88b9a07577fae6ce2034dd39aba419ebd9d94f444137055ad8ba` (copy `out/halium14/boot-ut-2edde0c6.img`), kernel `#18`. It is `92c0d49f…` (item 15) plus the new `stone.yaml`, byte-identical to the tested copy. The kernel and all other ramdisk files are the same; the recovery ramdisk has the same files, only repacked. Never written: `16bfa7b0…` (item 3) includes it and was written on 2026-11-12.
 
 ## Sources
 
