@@ -33,7 +33,7 @@ case "$MODE" in
     *) echo "usage: $0 [boot|trace|logs|disk]" >&2; exit 1 ;;
 esac
 
-for app in sh mount umount switch_root sleep mkdir grep sed cat cp echo ls head ln dmesg chroot chmod sync rm gzip cpio; do
+for app in sh mount umount switch_root sleep mkdir grep sed cat cp echo ls head ln dmesg chroot chmod sync rm gzip cpio tail cut mv; do
     ln -s busybox "$STAGE/root/bin/$app"
 done
 cp "$INIT_SRC" "$STAGE/root/init"

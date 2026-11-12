@@ -140,6 +140,169 @@ Planned steps:
 1. Test: power off, plug in, and see what boots.
 2. Branch in the initramfs on `androidboot.mode=charger`, together with the recovery branch of item 1. Take the charger program from the Halium ramdisk, or from the unified recovery if it has one.
 
+### What a boot was asked to be (2026-11-11)
+
+The user reports that offline charging "already works". That alone does not say whether the phone charges with the system off (the PMIC and the bootloader charge without any boot), or whether it boots all of Ubuntu Touch while plugged in. The journal cannot tell: as `phablet` it shows only some boots, truncated. The bootloader passes its keys on the kernel command line only (no `/proc/bootconfig` on 5.4).
+
+So `boot/ut-init/init` now appends one line per normal boot to **`/stone-boot-modes.log`** on the root filesystem (the last 50 boots are kept):
+- `mode=`: `androidboot.mode` (`charger` for a charger boot, otherwise `none`);
+- `force_normal_boot=`: the recovery flag;
+- `pon=`: the PMIC's power-on reason from the kernel log, for example "Triggered from Hard Reset and 'cold' boot" (this boot). A charger insertion and a power key press are reported differently.
+
+Recovery boots are not logged: they leave before the root filesystem is mounted. The ramdisk gained busybox `tail`, `cut` and `mv` for this.
+
+First charger test (image `983f1711…`, 2026-11-11). The user powered off, plugged into the PC, and saw the charging animation; then the phone booted normally. `/stone-boot-modes.log`:
+
+```
+mode=none     force_normal_boot=y pon=Triggered from Hard Reset and 'cold' boot      (after flashing)
+mode=charger  force_normal_boot=y pon=Triggered from CBL (External Power Supply) and 'cold' boot
+mode=none     force_normal_boot=y pon=Triggered from Hard Reset and 'cold' boot      (right after it)
+mode=none     force_normal_boot=y pon=Triggered from Hard Reset and 'cold' boot      (user's long-press reboot)
+```
+
+- The bootloader does pass `androidboot.mode=charger`, together with `force_normal_boot=1`. The power-on reason tells charger insertion (CBL) apart.
+- **UT already has a charger mode.** `lxc-android-config` ships `lxc-android-config-charger-generator`: with `androidboot.mode=*charger*` it makes `charger.target` the default target. That target is only `sysinit`, `lxc-android-config` (the Android container, whose init draws the charger UI) and usb-moded; Lomiri and the session do not start.
+  - In that mode `lxc-android-ready` remounts every filesystem read-only (`sysrq u`) against power cuts.
+  - So our init needs no charger branch. It only has to stay out of the recovery branch, which it does.
+- The charger boot ran about 13 s on USB (PC: usb-moded's fallback `04b9:0afe` from 20:09:38 to 20:09:51). Then came a reboot ("Hard Reset", most likely the power-key long press on the charger screen) into a normal boot.
+- **The normal boot after the charger boot had no adb or MTP.** At init-done (about 17 s) usb-moded chose `charging_only` (`1209:0afe`, mass storage) instead of its configured `mtp_adb`, before the session started, so the session watcher saw no MTP mode and did nothing. The next boot (the user's reboot) was normal again. The early journal is lost again, so why is not known yet. A guess: usb-moded decided "wall charger, not PC" from the charger driver's reported type after a charger-mode boot.
+- Not yet checked: whether the charger boot actually charges and at what current. The journal kept nothing from it.
+
+Next: a trace across a charger boot and the boot after it (`tools/phone-debug/stone-boot-trace.sh` and `stone-boot-trace-install.sh`):
+- usb-moded `-D`;
+- USB gadget, usb-moded mode, the charger driver's `online`/`type`/`usb_type`, and the battery, whenever they change, for 120 s;
+- in charger mode, written to `/dev/pmsg0` (pstore), because the filesystems are read-only there; the next normal boot copies `/sys/fs/pstore`.
+
+Second charger test (2026-11-11): charger boot (`mode=charger`, CBL) for at least 2.5 min, then a long press into a normal boot. **adb worked**: the first failure did not reproduce.
+- Normal boot: the charger driver reported `usb_type=SDP` (PC) throughout. `mtp_adb` came up at 18 s; the PC's libmtp reset came at 23 s; the watcher reconnected at session start (37 s) and again at the unlock (48 s).
+- **The charger-mode trace was lost.** pstore was empty: the power-on reason is a "'cold' boot", which does not keep ramoops RAM. Charger-mode data has to come some other way. `sysrq u` only remounts filesystems with a block device, so `/run` stays writable: the trace now records to `/run` in charger mode and, after its 120 s, copies the result to `/var/log/stone-boot-trace/` with `/` remounted read-write for about a second (test only).
+- **The battery was at 100 % (Full)**, so this test could not show charging in charger mode anyway.
+- **usb-moded ran without `-D`.** An `EnvironmentFile=` wins over `Environment=`, and the image's `stone-sunstone.conf` now sets `USB_MODED_ARGS=`. The trace now writes `/run/usb-moded/zz-stone-debug.conf` (read last) in `ExecStartPre`, before usb-moded starts.
+- In upstream usb-moded, `set_mode` only stores the requested mode in memory (`control_set_selected_mode`), so the watcher cannot change what a later boot selects. But `set_mode` is **rejected while usb-moded is "busy"** (and when the cable is not seen as a PC). The watcher tried to switch back to the original mode only once, so a rejection would have left the phone in `charging_only` for the whole session. It now retries up to 10 times. Live test from `/usr/local/lib/stone-test/` through a user drop-in, because the image's overlay restores `/usr/lib/stone/usb-mtp-reconnect.py` at every boot.
+- The init's cleanup list now includes all of these test files.
+
+Third charger test (2026-11-11): **no adb reproduced on the first try** (charger boot about 2 min, then a long press). The charger-mode trace saved nothing: the boot ended before its 120 s were up (now 60 s).
+
+Cause, from usb-moded's `-D` log of the normal boot after it:
+- The charger driver reported `usb_type=SDP` (PC) throughout, so **the cable was not mistaken for a wall charger**; that guess was wrong.
+- At init-done (16.9 s) usb-moded chose `mtp_adb` and started `adbd.service` (appsync `systemd_wait`). At 17.25 s, right after systemd reported adbd started, it bound the UDC: `UDC: write failure: No such device`, then "mode setting failed, try charging_only". It stayed in `charging_only` for the session. The session watcher (MTP modes only) and the user's unlock did not change that; a replug did.
+- `adbd.service` is `Type=notify`. adbd reports ready at "adbd started", before its USB thread opens `/dev/usb-ffs/adb/ep0` and writes the FunctionFS descriptors. A UDC bind while an FFS function has no descriptors fails with `ENODEV`.
+  - In the failing boot, the bind came about 5 ms after "opening control endpoint".
+  - In the good boot the order happened to be the other way round.
+- It is a race in UBports' adbd unit, not stone-specific (item 5). It shows up after charger boots, presumably because of their timing.
+
+Fix: **`etc/systemd/system/adbd.service.d/zz-stone-ffs-ready.conf`**:
+- `ExecStartPost` waits, at most 5 s and never failing the unit, until `/dev/usb-ffs/adb/ep1` exists. FunctionFS creates the endpoint files once the descriptors are written, which is when a bind can succeed.
+- systemd completes the start job only after `ExecStartPost`, so usb-moded's wait now covers the descriptors.
+- `$` is escaped as `$$` for systemd.
+- Live install with `stone-boot-trace-install.sh` (same path as in the image).
+
+Charging in that normal boot: 92 %, `Charging`, about 420–435 mA from the PC (SDP).
+
+Fix test (2026-11-11): the user ran several charger → long-press → normal cycles, and adb was there every time.
+- `/stone-boot-modes.log` holds four `mode=charger` (CBL) boots, each followed by a normal boot.
+- In the traced normal boots, no `UDC: write failure`, and `mtp_adb` came up at init-done; that held for both adbd starts (init-done at about 16.5 s, the watcher's reconnect at about 37.7 s).
+- adbd's `ExecStartPost` ran with `status=0` and added about 46 ms between the main process start and "started".
+- **Charger mode, traced** (`2-charger`): `charger.target` only, no Lomiri or lightdm in the journal, `Charging`, about 356–364 mA into the battery at 92 % and 4.37 V from the PC.
+
+**Offline charging works as intended**:
+- the bootloader's `androidboot.mode=charger` → `charger.target`;
+- the Android container's charger UI;
+- charging;
+- a long press boots normally, now with adb and MTP.
+
+Not checked: a wall charger (DCP) in charger mode, and the screen and power behaviour over a long charge.
+
+**Image** `out/halium14/boot-ut.img` SHA256 `7593d35ca9945681379266b050146f9d2ea23f8a84b3170120afde749d9f875b`, kernel `#17` (unchanged). Compared with `983f1711…` it adds:
+- the adbd `zz-stone-ffs-ready.conf` drop-in;
+- the watcher's retry when switching back;
+- the init cleanup of the charger-test files: the trace, the debug drop-in, the test watcher and its drop-in.
+
+Not yet written. `983f1711…` is kept as `out/halium14/boot-ut-983f1711.img`.
+
+### USB with the cable plugged in at boot (2026-11-11)
+
+User: **adb never works when the phone boots with the USB cable plugged in**; it needs an unplug and a replug. This is not a hardware problem. It is usb-moded's **rescue mode**, a UBports default that is wrong for a port that boots.
+
+What is seen:
+- UBports' `usb-moded.service` sets `Environment=USB_MODED_ARGS=-r`, and ports turn it off from `/etc/default/usb-moded.d/*.conf` (UBports' `device-specific-config.conf`: "Uncomment this to disable usb-moded's rescue mode. Only do this if you're sure your device will boot.").
+- With a cable plugged in when usb-moded starts, rescue mode puts the gadget in `developer_mode` and keeps it there until the cable is unplugged. That mode is RNDIS only: the phone is at `10.15.19.82`, and there is no adb.
+- Boot with the cable in (image `2708ccaf…`, usb-moded running `-r`):
+  - the PC got UBports' RNDIS identity `1209:0004` (`lineage_stone`, serial `stone`) and a "Wired connection" with `10.15.19.2`;
+  - `adb devices` was empty;
+  - the phone answered ping on `10.15.19.82`, but ssh is off, so there was no way in.
+- **The Type-C side is fine.** The kernel log of that boot shows `PowerOffCharge`, `Attached.SNK` at 1.7 s, and the gadget `CONFIGURED` at 13 s.
+- A first guess blamed the Type-C controller. It came from reading `[CC_Alert] 15/15` and `Unattached.SNK` as the boot state, but those lines are what an unplug looks like. A boot service that redid Type-C detection was written and tested: it found the partner present and did nothing. It was removed again (the init deletes its files from the root filesystem).
+
+Fix:
+- `USB_MODED_ARGS=` (empty) in the overlay's `etc/default/usb-moded.d/stone-sunstone.conf`. The phone boots reliably, and when it does not, the recovery (item 1) gives adb.
+- Live test: first `stone-usb-rescue-off-install.sh`, now part of `tools/phone-debug/stone-usb-install.sh`.
+  - A first live test changed `stone-sunstone.conf` on the phone, and usb-moded still started with `-r`. The initramfs copies the boot image's overlay over the root filesystem on every boot, so image `2708ccaf…` put its old copy of the file back (138 bytes, dated 1970).
+  - So the live test uses a drop-in the current image does not ship: `/etc/systemd/system/usb-moded.service.d/zz-stone-test-no-rescue.conf` with `Environment=USB_MODED_ARGS=`, read after the unit's `-r`. The next image's init deletes that drop-in. The image's own fix is the `stone-sunstone.conf` line.
+
+Test with rescue mode off (drop-in, 2026-11-11):
+- The RNDIS "Wired connection" is gone, but **adb and MTP still need a replug**. The PC's file manager: "Could not access device…".
+- usb-moded ran without `-r`. adbd and mtp-server were running before the replug (systemd stopped them at the replug).
+- Phone gadget events lined up with the PC's kernel log (the boot started at about 19:32:49):
+
+  | Phone uptime | Phone | PC |
+  |---|---|---|
+  | 13.1 s | first gadget config | `04b9:0afe` USB mass storage: usb-moded's charging fallback ("in bootup; dynamic modes blocked") |
+  | 15.6 s | `/run/systemd/boot-status/init-done` written | |
+  | 16.7 s | mtp_adb configured | `1209:0003` (mtp_adb) |
+  | 21.7 s | disconnect, connect, configured, all within about 240 ms | only "reset high-speed USB device", **no re-enumeration** |
+
+- Nothing changed after that until the replug, which brought adb and MTP up at once.
+- In upstream (Sailfish) usb-moded, `usbmoded_can_export()` is always true without `MEEGOLOCK`, and this build has no devicelock. So the screen lock does not gate the mode.
+- The step at 21.7 s was first read as usb-moded reacting to the user session. The instrumented boot below showed it is the PC resetting the device.
+
+Instrumented boot (`stone-usb-boot-trace.sh`: usb-moded `-D`, journal, gadget state every 0.2 s):
+- **The phone changes mode only once:**
+  - 13.3 s: `charging_only` (mass storage, `0afe`);
+  - 16.5 s: init-done arrives as the D-Bus signal `com.nokia.startup.signal.init_done`, and `usb-rescue-mode-off.service` runs;
+  - 16.8 s: usb-moded starts `adbd.service` (appsync), then sets `ffs.adb,mtp.mtp` and `0003` and binds the UDC;
+  - 17.4 s: adbd has `FUNCTIONFS_ENABLE`, and its transport is up.
+- **mtp-server starts only at 32.6 s.** It is a user-session service, started by `mtp-server-usb-moded-watcher` once the session is up.
+- In between, the PC's KDE MTP backend opened the new device (`mtp-probe`: "was an MTP device") and got no answer. Five seconds later it logged `LIBMTP libusb: Attempt to reset device`; the kernel logged "reset high-speed USB device".
+- On the phone that reset is the 22.6 s step: the UDC state goes `default` → `configured`, with no mode change. adbd logs `FUNCTIONFS_DISABLE`, "connection terminated", and never re-arms (no `FUNCTIONFS_ENABLE` afterwards). The PC's MTP backend has given up by then.
+- **A replug works** because by then mtp-server is already running: the watcher restarts it within about 1.5 s, inside libmtp's 5 s timeout.
+- Rescue mode is a separate problem. UBports' `usb-rescue-mode-off.service` clears it at init-done, but usb-moded stays in a rescue mode it has already entered "until something else is explicitly requested / cable is detached". So `-r` still has to go.
+
+So: **the phone exposes MTP about 15 s before anything answers it, and a PC that probes MTP at once resets the device and breaks adb.** This is not stone-specific. It is a UBports usb-moded/mtp-server ordering problem and belongs in item 5. A PC without an MTP backend that probes immediately may not see it.
+
+First fix, a system service that reconnected once mtp-server was up (`usb-mtp-reconnect.sh`, test of 2026-11-11):
+- **adb now works without a replug.** The user saw adb briefly early in the boot, then gone, then back: that is adb before the PC's libmtp reset, and after the reconnect at 34 s.
+- The PC saw a real disconnect and a new `0003` device, and there was no second libmtp reset.
+- **MTP still failed** with "Could not access device… make sure it is unlocked", although the phone was unlocked. `kioclient ls mtp:/lineage_stone/` gives the same message.
+  - KDE's `kmtpd` held the device (`/modules/kmtpd/device0`) with **no storages**. That message is KIO's text for a device without storages.
+  - mtp-server never logged the requests.
+  - UBports' mtp-server watches `com.lomiri.LomiriGreeter` `IsActive` on the session bus, and adds its storages only when the greeter goes inactive ("device is not locked, adding storage").
+  - PC-side MTP clients read the storage list once, when the device appears. A PC that connects while the phone is locked therefore never sees the storages after the unlock. Android re-enumerates on unlock and "Allow"; UBports does not.
+  - So this is not only a boot problem: **plugging into a PC while locked** should behave the same. That is another usb-moded/mtp-server issue for item 5.
+
+Fix: **`usr/lib/stone/usb-mtp-reconnect.py`**, a user-session service (**`etc/systemd/user/stone-usb-mtp-reconnect.service`**, in `ubuntu-touch-session.target` like UBports' `mtp-server-usb-moded-watcher`):
+- It does a software replug: usb-moded `set_mode` `charging_only`, then back to the same mode. The D-Bus policy allows `set_mode` for any user.
+- It does this once at session start, if a PC is attached in `mtp` or `mtp_adb` mode (the boot case: the PC met no mtp-server, and its libmtp reset broke adb).
+- And on an unlock, if a PC got the MTP device while the phone was locked, 1.5 s after the unlock so mtp-server has added its storages.
+- With no PC attached, or in other modes, it does nothing.
+- The system service from the first fix is gone; the init deletes its live-installed files.
+- Live test 2026-11-11, started with `systemd-run --user` on the running phone (locked, PC attached): the start reconnect ran (`mtp_adb` → `charging_only` → `mtp_adb` in 2 s) and adb came back. KDE then had the device with no storages, as expected while locked.
+- After the unlock, MTP worked (user).
+- After a reboot MTP failed again, but adb worked. Expected: the watcher had only been started by hand, so that boot ran the earlier system service instead.
+- Live install for the boot test: `tools/phone-debug/stone-usb-install.sh`. It installs the drop-in without rescue mode and the user watcher, and removes the boot trace, the system service and the Type-C test.
+- Boot test with that installed (cable in, 2026-11-11): passed. adb came up without a replug; after the unlock, one USB reconnect, then MTP opened without a replug.
+- **Image** `out/halium14/boot-ut.img` SHA256 `983f1711496c92325e1f41b6d42b6d4c7a19aac03033a4bb6d9aeb7a5ee8c30f`, kernel `#17` (unchanged). It carries:
+  - `USB_MODED_ARGS=` in `stone-sunstone.conf`;
+  - the session watcher;
+  - the boot-mode log (`/stone-boot-modes.log`), with busybox `tail`, `cut` and `mv` added to the ramdisk;
+  - init cleanup of the test files (the drop-in, the trace, the system reconnect service, the Type-C test).
+
+  Not yet written. The previous image is kept as `out/halium14/boot-ut-2708ccaf.img`.
+
+Also seen: the **system journal keeps only a boot's last part**. A boot with the cable in kept 75 system entries, none before the NTP sync at 42 s, while `/var/log/journal` holds many 8 MB `user-32011@…` files. It is likely journald rotation and vacuuming confused by the 1970 RTC time before the sync. Not investigated yet; it matters for bug reports (item 11).
+
+A different bug, seen while installing this: **adbd sometimes segfaults on `adb push`**. A directory push, or a few file pushes back to back, gives `adbd.service: Main process exited, code=killed, status=11/SEGV`. systemd restarts it, and USB came back without a replug about 40 s later. The Type-C state does not change. Not investigated yet. It is UBports' adbd, so it belongs with item 5 once it can be reproduced.
+
 ## 3. Cleanup before going public
 
 Goal: a repository that can be published without personal data, and that someone else can build from.

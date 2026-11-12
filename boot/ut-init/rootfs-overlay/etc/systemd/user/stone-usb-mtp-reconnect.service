@@ -1,0 +1,14 @@
+[Unit]
+Description=Reconnect USB when a PC got MTP before the session could serve it
+# See /usr/lib/stone/usb-mtp-reconnect.py. Same placement as UBports'
+# mtp-server-usb-moded-watcher.service.
+After=lomiri-full-greeter.service lomiri-full-shell.service lomiri-greeter.service lomiri-shell.service
+PartOf=ubuntu-touch-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/usb-mtp-reconnect.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=ubuntu-touch-session.target

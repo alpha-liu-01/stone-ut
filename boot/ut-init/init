@@ -113,6 +113,16 @@ mount -t ext4 -o rw "$USERDATA" /newroot || fail "failed to mount $USERDATA"
 
 dmesg > /newroot/stone-initramfs-dmesg.txt 2>/dev/null
 cp /tmp/report.txt /newroot/stone-initramfs-report.txt 2>/dev/null
+# One line per boot, kept across boots (docs/roadmap-release.md item 2): what
+# the bootloader asked for (androidboot.mode, e.g. charger) and why the PMIC
+# powered on (key press, charger insertion, reset).
+PON=$(dmesg | sed -n 's/.*PMIC@SID0 Power-on reason: //p' | head -n 1)
+BL=/newroot/stone-boot-modes.log
+{
+    [ -f "$BL" ] && tail -n 49 "$BL"
+    echo "uptime=$(cut -d' ' -f1 /proc/uptime) mode=${BOOT_MODE:-none} force_normal_boot=${NORMAL_BOOT:-n} pon=${PON:-unknown}"
+} > "$BL.new" && mv "$BL.new" "$BL"
+log "boot mode ${BOOT_MODE:-none}, power-on reason: ${PON:-unknown}"
 
 # Device files for the rootfs (Halium overlay and the like), refreshed on every
 # boot from boot/ut-init/rootfs-overlay. The Ubuntu Touch image ships no
@@ -123,6 +133,23 @@ rm -rf /newroot/usr/share/halium-overlay
 for f in \
     etc/systemd/system/ofono.service.d/zz-stone-debug.conf \
     etc/systemd/user/lomiri-full-greeter.service.d/stone-core.conf \
+    etc/systemd/system/usb-moded.service.d/zz-stone-test-no-rescue.conf \
+    etc/systemd/system/usb-moded.service.d/zz-stone-debug.conf \
+    etc/systemd/system/stone-boot-trace.service \
+    etc/systemd/system/basic.target.wants/stone-boot-trace.service \
+    etc/systemd/system/charger.target.wants/stone-boot-trace.service \
+    usr/local/sbin/stone-boot-trace.sh \
+    usr/local/lib/stone-test/usb-mtp-reconnect.py \
+    etc/systemd/user/stone-usb-mtp-reconnect.service.d/zz-stone-test.conf \
+    etc/systemd/system/multi-user.target.wants/stone-usb-mtp-reconnect.service \
+    etc/systemd/system/stone-usb-mtp-reconnect.service \
+    usr/lib/stone/usb-mtp-reconnect.sh \
+    etc/systemd/system/basic.target.wants/stone-usb-boot-trace.service \
+    etc/systemd/system/stone-usb-boot-trace.service \
+    usr/local/sbin/stone-usb-boot-trace.sh \
+    etc/systemd/system/multi-user.target.wants/stone-usb-typec-kick.service \
+    etc/systemd/system/stone-usb-typec-kick.service \
+    usr/lib/stone/usb-typec-kick.sh \
     usr/lib/stone/call-audio-watch.sh \
     usr/lib/stone/speaker-route.sh \
     ; do
