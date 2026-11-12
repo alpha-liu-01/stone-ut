@@ -1,0 +1,44 @@
+From 71096b8000ef6e8935f406a44a0a3ee219ce5b4c Mon Sep 17 00:00:00 2001
+From: alpha-liu-01 <44378856-alpha-liu-01@users.noreply.gitlab.com>
+Date: Thu, 12 Nov 2026 12:32:14 -0500
+Subject: [PATCH] server: don't block on the previous frame's present fence
+
+RealHwc2Wrapper::set() waits, after presenting frame N, for the present
+fence of frame N-1 (marked "FIXME: is needed at all?"). With Qualcomm's
+SDM composer on a 120 Hz panel (Xiaomi Redmi Note 12 5G, SM4375,
+Halium 14) that fence signals a vsync late, so the wait costs a whole
+extra vsync per frame and the system compositor never exceeds 60 fps.
+
+Back pressure does not depend on this wait: since the HWC2 present-fence
+fix, each framebuffer is guarded by the present fence of the frame after
+it (update_usage()), so a buffer is not rendered into before the panel
+has moved on from it.
+
+Measured on that device, scrolling Lomiri's app drawer with the panel at
+120 Hz (frames committed to the panel per second, from the SDE driver's
+measured_fps): 55-62 with the wait, 102-105 without it.
+---
+ src/platforms/android/server/real_hwc2_wrapper.cpp | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/platforms/android/server/real_hwc2_wrapper.cpp b/src/platforms/android/server/real_hwc2_wrapper.cpp
+index 139800e..dfcb0f5 100644
+--- a/src/platforms/android/server/real_hwc2_wrapper.cpp
++++ b/src/platforms/android/server/real_hwc2_wrapper.cpp
+@@ -319,11 +319,13 @@ void mga::RealHwc2Wrapper::set(
+             // android11-gsi/graphics/composer/2.1/utils/hwc2on1adapter/include/hwc2on1adapter/HWC2On1Adapter.h#137
+             // and https://source.android.com/docs/core/graphics/sync#hardware_composer_integration
+ 
+-            // Wait for the previously submitted frame to be displayed to ensure we're not rendering too fast
+-            // FIXME: is needed at all?
++            // Do not wait here for the previously submitted frame to be
++            // displayed. With some composers (Qualcomm SDM) that wait costs a
++            // whole extra vsync per frame: 60 Hz on a 120 Hz panel. Back
++            // pressure already comes from the framebuffers, each guarded by
++            // the next frame's present fence (update_usage() below).
+             auto _last_present_fence = last_present_fence[display_id];
+             if (_last_present_fence != -1) {
+-                sync_wait(_last_present_fence, -1);
+                 close(_last_present_fence);
+                 last_present_fence[display_id] = -1;
+             }

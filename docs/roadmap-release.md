@@ -422,18 +422,105 @@ Candidates, from the hardware documents:
 
 | Fix | Upstream | Present here as |
 | --- | --- | --- |
-| HWC2 present-fence wait (120 Hz) | mir-android2-platform | runtime binary patch; `tools/upstream/mir-android2-platform-0001-*.patch` |
-| AppArmor label by pid when D-Bus has none | biometryd (and a 24.04-2.x release of biometryd main). Since item 12 D-Bus has the label here, so the fallback is no longer needed on this port. Upstream it only for kernels without mediation, or just ask for a 24.04-2.x release of biometryd main (the HIDL/AIDL backend). | rebuilt daemon; `tools/biometryd/` |
-| Port names (`output-earpiece` …) | lomiri-telephony-service: make the port names configurable | binary patch (`tools/patch-telephony-ports.py`) |
+| HWC2 present-fence wait (120 Hz) | mir-android2-platform: **[!21](https://gitlab.com/ubports/development/core/hybris-support/mir-android2-platform/-/merge_requests/21)**, opened 2026-11-12 | runtime binary patch; `tools/upstream/mir-android2-platform-0001-*.patch` |
+| AppArmor label by pid when D-Bus has none | biometryd. Since item 12 D-Bus has the label here, so the fallback is no longer needed. The 24.04-2.x backport of the libgbinder backend already exists: NotKit's draft **[!54](https://gitlab.com/ubports/development/core/biometryd/-/merge_requests/54)**, which we tested and reported as working ([comment](https://gitlab.com/ubports/development/core/biometryd/-/merge_requests/54#note_4222106402), 2026-11-12). Found on the way: **[#14](https://gitlab.com/ubports/development/core/biometryd/-/work_items/14)**, Lomiri aborting after a biometryd restart. | rebuilt daemon; `tools/biometryd/` |
+| Port names (`output-earpiece` …) | lomiri-telephony-service: **[#76](https://gitlab.com/ubports/development/core/lomiri-telephony-service/-/work_items/76)**, opened 2026-11-12, proposing a match by PulseAudio port type (or the `[Out]`/`[In]` names) | binary patch (`tools/patch-telephony-ports.py`) |
 | ~~Empty AppArmor label → "unconfined"~~ | media-hub. **Dropped** (item 12): with labels the stock binary works; the patch is in `archive/`. | none |
-| `releaseAudioSessionId` hang | Halium (`libaudioclient` without AudioFlinger) | binary patch (`tools/patch-libaudioclient.py`) |
-| mSBC through Enhanced Setup (kernels < 5.14) | Halium/UBports kernel patch collections; any QCOM SCO-over-PCM port | `kernel/patches/0009` |
-| First refresh-rate command after continuous splash | crDroid kernel (`dsi_panel.c`) | `kernel/patches/0008` |
-| APN MVNO `gid` matching | ofono apndb plugin / lineageos-apndb | `tools/apndb-prefer-mvno.py` |
-| Codec-gain in-call volume without ACDB | none generic (a design note for the UBports porting docs) | `call_volume.py` |
-| `touch-syslog` logrotate config without `missingok` (no rsyslog on 24.04, `logrotate.service` fails) | lxc-android-config | not worked around |
+| `releaseAudioSessionId` hang | Halium (`libaudioclient` without AudioFlinger). **Deferred** (2026-11-12, the user's choice) until a Halium 14 build can test it from source | binary patch (`tools/patch-libaudioclient.py`) |
+| mSBC through Enhanced Setup (kernels < 5.14) | No shared Halium kernel patch collection exists, so it is documented for porters: **[docs.ubports.com !724](https://gitlab.com/ubports/docs/docs.ubports.com/-/merge_requests/724)** (Sound page), linking the commit in the public kernel fork | `kernel/patches/0009` |
+| First refresh-rate command after continuous splash | community stone kernel: **[xiaomi-sm6375-devs/android_kernel_xiaomi_moonstone#4](https://github.com/xiaomi-sm6375-devs/android_kernel_xiaomi_moonstone/issues/4)**, opened 2026-11-12 (issue with the one-line fix; the same code is in crDroid 16.0) | `kernel/patches/0008` |
+| APN MVNO `gid` matching | ofono-apndb-plugin: **[#2](https://gitlab.com/ubports/development/core/ofono-apndb-plugin/-/work_items/2)**, opened 2026-11-12. The fix needs ofono-sailfish too; issue only, no offer to implement (the user's choice) | `tools/apndb-prefer-mvno.py`; stays downstream |
+| Codec-gain in-call volume without ACDB | design note in **[docs.ubports.com !724](https://gitlab.com/ubports/docs/docs.ubports.com/-/merge_requests/724)** (Sound page) | `call_volume.py` |
+| `touch-syslog` logrotate config without `missingok` (no rsyslog on 24.04, `logrotate.service` fails) | lxc-android-config: **[!217](https://gitlab.com/ubports/development/core/hybris-support/lxc-android-config/-/merge_requests/217)**, opened 2026-11-12 | not worked around |
 
 Planned steps: open merge requests in that order, starting with the smallest and most general. Track their state in this table.
+
+### Implementation notes
+
+2026-11-12, setup (the user):
+- `glab` is logged in as `alpha-liu-01` (GitHub: `gh`, same name).
+- Commits to GitLab projects use the GitLab private commit address `44378856-alpha-liu-01@users.noreply.gitlab.com`, set per repository (`git config user.email`). The global git identity stays the GitHub noreply address.
+- Workflow, agreed: each change is prepared locally in `out/upstream/<project>` (ignored), then built and tested on the phone. The commit and the merge-request text are shown to the user, and pushed or opened only after their yes, one at a time. Items that need maintainer input (a biometryd release, configurable port names in telephony-service, the in-call volume note) start as issues.
+- Open questions, to settle when their items come up:
+  - Halium's `libaudioclient`: a source test needs a Halium 14 build (about 250 GB; 193 GB free).
+  - `0008` belongs on crDroid's 16.0 kernel, which this phone does not run.
+
+**lxc-android-config `touch-syslog`** ([!217](https://gitlab.com/ubports/development/core/hybris-support/lxc-android-config/-/merge_requests/217)):
+- Every `logrotate.service` run fails with only these two errors: `stat of /var/log/syslog failed` and `stat of /var/log/auth.log failed` (24.04 has no syslog daemon).
+- The fix adds `missingok` to both entries. The file was unchanged upstream since "Import 0.229", and no issue or merge request about it existed.
+- Tested on the phone with `logrotate -d -s <state>` as phablet: the current file exits 1 with the two errors; the fixed one says "does not exist -- skipping" for both and exits 0.
+- Fork `alpha-liu-01/lxc-android-config`, branch `personal/alpha-liu-01/logrotate-missingok` (`9f531c50`); opened against `main` on 2026-11-12.
+
+**mir-android2-platform present-fence wait** ([!21](https://gitlab.com/ubports/development/core/hybris-support/mir-android2-platform/-/merge_requests/21)):
+- Upstream `main` is `72f96d2`, the same commit as the archive's 1.8.0~20260320103600.20~72f96d2. The wait came with !16 (TheKit, 2024, the HWC2 present-fence fix), marked `FIXME: is needed at all?`. Nothing open touches it; issue #3 (a 10 ms sleep assuming 60 Hz) is related.
+- **Built from source:** `tools/upstream/build-mir-android2-platform.sh` cross-builds only the platform module (target `mirplatformgraphicsandroid`, tests off) for arm64 in Docker. Its Dockerfile is `ubuntu:24.04` with arm64 multiarch and the UBports 24.04-2.x repository. `PKG_CONFIG_EXECUTABLE` has to be passed as a cache variable, or CapnProto's CMake config loses it.
+  - Result `2c8f5be9…`: the same `NEEDED` libraries, soname and exported symbols as the archive's module, and one `sync_wait` call fewer (5 against 6).
+- **Swap test:** `tools/phone-debug/stone-mir-source-test.sh source` (root) stops lightdm, detaches the runtime patch's bind mount and bind-mounts the source build, then starts lightdm again. Runtime only; a reboot restores the image's patch.
+  - A plain `umount` is "busy" even with the compositor stopped, because a root process still holds the file. So it uses `umount -l`.
+  - An `EXIT` trap restarts lightdm, after one failed run left the phone without a display.
+- **Measured** (`fps-panel.py`, scrolling the app drawer, panel at 120 Hz): 102–105 frames committed per second (mean 97 over 20 s, including the stop), GPU at 700 MHz. The runtime patch gave 95–103 in the same test, and stock 55–62. The user found it smooth.
+- The commit is `71096b8` with the comment re-wrapped (the code is the tested build). `tools/upstream/` now holds exactly this commit as `mir-android2-platform-0001-server-dont-block-on-the-previous-frames-present-fence.patch` (author: the GitLab noreply address).
+- Fork `alpha-liu-01/mir-android2-platform`, branch `personal/alpha-liu-01/hwc2-no-present-fence-wait`; opened against `main` on 2026-11-12.
+- When it is merged and in the archive, remove the runtime patch from `display-setup.sh`. Its hash check already leaves an updated library alone.
+
+**biometryd** (comment on [!54](https://gitlab.com/ubports/development/core/biometryd/-/merge_requests/54#note_4222106402), issue [#14](https://gitlab.com/ubports/development/core/biometryd/-/work_items/14)):
+- **No request was needed.** NotKit's !54 (draft, 2026-09-25) backports !48, the libgbinder HIDL/AIDL backend that we build from `main`, to `ubports/24.04-2.x`. In July peat-psuwit said it was too late for 24.04-2.0 but fine for 24.04-2.1. Its CI builds passed, but no device had reported on it.
+- The 24.04-2.x branch, and !54, still call `GetConnectionAppArmorSecurityContext`. Since kernel `#20` that Ubuntu dbus method works here: `gdbus … GetConnectionAppArmorSecurityContext org.freedesktop.Telepathy.MissionControl5` returned `/usr/lib/telepathy/mission-control-5`. Before item 12 it failed, which is why the port runs `main`.
+- **Test of !54's own CI build** (`gbpb6cff1`, from repo.ubports.com `24.04-2.x_-_PR_biometryd_54`, SHA256 checked against the index):
+  - `tools/phone-debug/stone-biometryd-mr54-test.sh on|off|log` (root) runs its daemon and library from `/home/phablet/biometryd-mr54/` through a drop-in in `/run`. No package changes.
+  - The user unlocked with an enrolled finger, enrolled a new finger, unlocked with it and deleted it: all worked.
+  - The daemon log showed only "Attempted to unregister path", which is #6.
+- **Lomiri aborts after a biometryd restart**, with either build: `terminate called after throwing an instance of 'std::runtime_error'` / `UnknownObject: Method "IdentifyUser" … doesn't exist`, `lomiri-full-greeter` ABRT. It happened on the first fingerprint attempt after switching to !54's daemon and again after switching back.
+  - Cause: the QML plugin keeps the old daemon's device and identifier objects. `dbus::stub::Identifier::identify_user()` throws from `result.value()`, and the `Q_INVOKABLE` `qml::Identifier::identifyUser()` does not catch it.
+  - Filed as biometryd #14 (no earlier report in biometryd or Lomiri).
+- The image keeps running our `main` build until a 24.04-2.x release has the backend. Then drop `etc/systemd/system/biometryd.service.d/zz-stone-biometryd.conf` and `usr/lib/stone/biometryd/`; the packaged daemon works since item 12.
+
+**lomiri-telephony-service port names** (issue [#76](https://gitlab.com/ubports/development/core/lomiri-telephony-service/-/work_items/76)):
+- `handler/qpulseaudioengine.cpp` (upstream `f977434a`) matches ports by name. It knows the droid names, plus the pre-PulseAudio-15 UCM names that !7 added in 2020 (`Earpiece`, `Speaker`, `Headphone`, `DigitalMic`, `HeadsetMic`). PulseAudio 16.1 on 24.04 names UCM ports `[Out] X`/`[In] X`, so a UCM device fails `if (!earpiece || !speaker) return;`.
+- A broader rework of the port selection ("[handler] Improve sink and source find and select", `0355e78b`, Marius Gripsgard, 2021) was reverted in `daf06b1d` (#39) because it broke routing on android9 devices. The issue therefore keeps the droid path untouched.
+- Each port has a `type` (`pa_device_port_type`, PulseAudio ≥ 14), filled from the standard UCM device names. Here: Earpiece, Speaker, Headphones, Headset, Mic, Bluetooth; `[Out] USB`, `[In] USBMic` and `[In] BluetoothMic` are Unknown.
+- The issue proposes (1) a match by type when no name matched, or (2) adding the `[Out]`/`[In]` forms of the standard names. It offers a merge request for (1), tested on this device.
+- Open draft !108 (fredldotme, 2025: USB-C audio as a separate card) is a different case and is only referenced.
+- If (1) is chosen: rename our UCM devices `BluetoothMic` and `USBMic` to standard names, so they get a type, and write the merge request (build telephony-service from source; test earpiece, speaker, 3.5 mm, Bluetooth HFP and USB).
+
+**APN matching by MVNO** (ofono-apndb-plugin issue [#2](https://gitlab.com/ubports/development/core/ofono-apndb-plugin/-/work_items/2)):
+- The provisioning plugin is `ubports/development/core/ofono-apndb-plugin`, installed here as `ofono-sailfish-apndb-plugin` (0.20230719, `8585296`). Its `ubuntu-apndb.c` does support `mvno_type` `imsi`, `spn` and `gid` (GID1 as a case-insensitive prefix).
+- **The cause:** `apndb-provision.c` passes `imsi` and `gid1` only with `UBUNTU_API`; otherwise both are `NULL`. `debian/rules` sets `-DUBUNTU_API=ON` only for the `ofono-ubports` variant. So every ofono-sailfish device skips IMSI- and GID1-matched MVNO entries.
+- **It can't be fixed in the plugin alone.** Sailfish ofono's provisioning driver API (`include/gprs-provision.h`) is `get_settings(mcc, mnc, spn, …)`, with no modem or SIM handle. Upstream Sailfish ofono (`sailfishos/ofono`) never reads EF_GID1. UBports packages it in `packaging/ofono-sailfish` (16 patches, no provisioning change).
+- **Proof:** `ProvisionContext` on the unused MMS context `/ril_0/context4` (no APN; Fizz carries MMS on the internet context) returned `NotAvailable`, which `gprs.c` gives only after asking the driver, and the context stayed unchanged. The journal showed `Provisioning for MCC 302, MNC 500, SPN '(null)', IMSI '(null)', GID1 '(null)'`. The journal no longer had the first provisioning (oldest boot kept: 2026-11-11 15:35).
+- The issue proposes two parts: in ofono-sailfish, read EF_GID1 and add an optional `get_settings_ext(mcc, mnc, spn, imsi, gid1, …)` driver callback; in the plugin, use it in the Sailfish build. The user decided not to offer an implementation (a core telephony change).
+- **So the fix stays downstream:** `tools/apndb-prefer-mvno.py` with `302 500 gid 55` in `build-boot-image.sh`. It is tied to that SIM. Another MVNO SIM needs its own arguments, and a general build-time fix is impossible, because the match depends on the SIM.
+
+**Refresh-rate command after continuous splash** (`0008`; issue [xiaomi-sm6375-devs/android_kernel_xiaomi_moonstone#4](https://github.com/xiaomi-sm6375-devs/android_kernel_xiaomi_moonstone/issues/4)):
+- **crDroid 16.0 still has it.** `crdroidandroid/android_kernel_xiaomi_stone` (16.0, `06497b24`, 2026-03-29) starts `dsi_refresh_flag` at 60 (line 3669), with the same `dsi_set_backlight_control()` check.
+- **Origin:** "techpack: display: Implement backlight adjustment for 120/60 Hz" (Alexander Winkowski, 2023-08-22, "Based on veux-r-oss", Gerrit `Change-Id`). The same line is in the community tree `xiaomi-sm6375-devs/android_kernel_xiaomi_moonstone` (`lineage-23.2`). `bugsoverloaded/android_kernel_xiaomi_sm6375` 17.0 has no `dsi_panel.c` in the kernel any more.
+- Neither crDroid's stone kernels (2 pull requests in total) nor the community tree (3) use pull requests much. With the user, an issue with the fix on the community tree (option 2) was chosen over a pull request or skipping it.
+- On Android it would show only when the first frame is at 60 Hz (refresh rate limited to 60); not tested on Android and not reported there.
+
+**Porting docs, AppArmor on 5.4** ([docs.ubports.com !723](https://gitlab.com/ubports/docs/docs.ubports.com/-/merge_requests/723)):
+- `porting/configure_test_fix/Apparmor.rst` listed AppArmor patch sources up to 4.14 only. Its rule, "pick the most recent block of commits", fails for the FP5 5.4 kernel: its four commits are dated 2024-06-01 (three) and 2024-10-24 (one).
+- The merge request adds:
+  - the 5.4 source;
+  - the four commit titles, in order;
+  - the `U_LOCK_SECOND` build fix for newer 5.4 stable kernels, linking `310d67d7` in the public fork `alpha-liu-01/android_kernel_xiaomi_sm6375`;
+  - the `features/dbus` / `network/af_unix` check.
+- RST checked with docutils (no new warnings). Commit `b70e812`; fork `alpha-liu-01/docs.ubports.com`; opened 2026-11-12.
+- The pipeline failed before any job ran: "The pipeline failed due to the user not being verified" (GitLab shared runners in the fork need a verified account). The user verified the account; the re-run pipeline `3061233090` passed (`build-job`, 2026-11-12).
+- The fork's `stone-ut` branch was force-updated by the user; GitHub now has `stone-ut` = `boot-ca678721` = `e0144c10`.
+
+**Porting docs, call audio without the droid card** ([docs.ubports.com !724](https://gitlab.com/ubports/docs/docs.ubports.com/-/merge_requests/724)): covers `0009` and the in-call volume note.
+- **No shared kernel-patch collection:** the FP5 kernel has only stock 5.4's host-side mSBC (`esco_param_msbc`), and UBports' GitLab has no wideband or mSBC discussion. The Sound page, which only covered pulseaudio-modules-droid, was the place to tell porters about it.
+- **The new section** "Call audio without pulseaudio-modules-droid" has three parts:
+  - telephony-service port names, linking #76, with advice to use the standard UCM device names;
+  - in-call volume: a corked `phone`-role stream mapped to the codec RX gain (`RX_RX0`/`RX_RX2 Digital Volume`, in Bolero's RX macro, checked in `rx-macro.c`), because `Voice Rx Gain` needs ACDB;
+  - wideband Bluetooth calls: why kernels before 5.14 fail over SCO-over-PCM, the 5.4 patch (`a90c3a0b` in the public fork), the `bluetooth.sco_offload_msbc` / `_active` parameters (checked in `hci_conn.c`), `enable_msbc=true`, and the `BT SampleRate` race with the ringtone.
+- The router and `call_volume.py` are described, not linked, because the port repository is still private.
+- Commit `e231c5b` on `master`, separate from !723. Fork branch `personal/alpha-liu-01/sound-ucm-calls`; opened 2026-11-12. Pipeline `3061263577` passed (`build-job`).
+
+**Halium `libaudioclient` hang: deferred.**
+- The fix belongs in Halium's patches on LineageOS 21. Testing it from source needs a Halium 14 checkout and build: roughly 250 GB, while the internal disk has 193 GB free.
+- The user decided to skip it for now. For the later build, they named their external SSD `/run/media/alpha/YMTC` (about 350 GB free). It already holds LineageOS 18.1 and 23.2 trees, so it is the build disk for Android trees on this machine.
+- Until then the image keeps the binary patch (`tools/patch-libaudioclient.py`).
 
 ## 6. Port structure: keep this layout or move to UBports' standard one
 

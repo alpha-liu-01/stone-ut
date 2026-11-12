@@ -53,7 +53,7 @@ Sources:
 - **Package:** `mir1-platform-graphics-android2-16`, source [mir-android2-platform](https://gitlab.com/ubports/development/core/hybris-support/mir-android2-platform), 1.8.0~20260320103600.20~72f96d2+ubports24.04.2.
 - **Licence:** the project is GPL-3.0 and LGPL-3.0; the patched file, `real_hwc2_wrapper.cpp`, is LGPL-3.0.
 - **Hashes:** stock SHA256 `146cf674…`, patched `bc58bdfd…`.
-- **The change as a source patch:** [tools/upstream/mir-android2-platform-0001-hwc2-dont-block-on-previous-present-fence.patch](tools/upstream/).
+- **The change as a source patch:** [tools/upstream/mir-android2-platform-0001-server-dont-block-on-the-previous-frames-present-fence.patch](tools/upstream/).
 
 ### Committed binaries: biometryd
 
