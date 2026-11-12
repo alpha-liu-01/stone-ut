@@ -52,6 +52,7 @@ Checked 2026-11-11 for this document:
 13. Bluetooth: turning Bluetooth off and on, and reconnecting.
 14. System journal: the start of every boot is lost.
 15. Android log (logcat) reads back empty.
+16. Top panel: an indicator sits on the front camera.
 
 ## 1. Recovery
 
@@ -731,9 +732,38 @@ Result (2026-11-12), one fresh logd per step:
 
 **Image** `out/halium14/boot-ut.img` SHA256 `92c0d49f9a8ecbe73456d5c9b35e6327f59bb4e2263e75f2a2dcc690b4a12a48` (copy `out/halium14/boot-ut-92c0d49f.img`), kernel `#18`. It is `663a4d80…` (kept as `out/halium14/boot-ut-663a4d80.img`) plus `usr/bin/logcat` and the logd watchdog, all byte-identical to the tested copies. Not yet written.
 
+## 16. Top panel: an indicator sits on the front camera
+
+The front camera is a punch-hole in the middle of the top edge. Lomiri's top panel was 63 px high (3 grid units of 21 px), and one indicator icon always sat on the camera.
+
+What is seen (2026-11-12):
+- Lomiri (24.04-2.x) supports display cutouts through deviceinfo (UBports' "Display cutouts" porting page). It reads these keys from `/etc/deviceinfo/devices/stone.yaml`, in physical pixels:
+  - `CollapsedPanelHeight`: the panel height, used in portrait only;
+  - `DisplayCutoutsCollapsed` and `DisplayCutoutsExpanded`: rectangles (`x y width height`) that indicators skip, with the panel collapsed or pulled down. The expanded panel is 147 px (7 gu);
+  - `DisplayCutoutsCollapsedLight`: the same for the light theme (optional; falls back to the collapsed list).
+- When `DisplayCutoutsCollapsed` is set, `lomiri` loads `Panel/WithCutouts` instead of `Panel/WithoutCutouts` at start. Our `stone.yaml` set none of these, so the panel ignored the camera.
+- The camera's position, from the vendor overlay `FrameworksResOverlayStone.apk`:
+  - `config_mainBuiltInDisplayCutout`: `M -25,52 a 25,25 0 1,0 50,0 …`, a 50 px circle centred horizontally at y 52, so x 515–565 and y 27–77 on the 1080×2400 panel;
+  - `rounded_corner_radius` 102 px;
+  - Android's own `status_bar_height_portrait` is 104 px.
+- The camera reaches 14 px below the 63 px panel.
+
+Fix, in `etc/deviceinfo/devices/stone.yaml`:
+- `CollapsedPanelHeight: 95`. 104 px (Android's value, which centres the icons on the camera) looked too tall; 95 px covers the camera with a margin.
+- `DisplayCutoutsCollapsed`: `0 0 34 95`, `488 0 104 95`, `1046 0 34 95`. These are the camera with 27 px of room on each side, and the two rounded corners. The corner width follows the porting page's estimate, w ≈ r − √(r² − (r − h/4)²).
+- `DisplayCutoutsExpanded`: the same rectangles at 147 px.
+- Landscape is unchanged: Lomiri uses neither the height nor the cutouts outside portrait.
+
+Live test (2026-11-12): the yaml was copied to `/etc/deviceinfo/devices/stone.yaml` and `lomiri-full-greeter` restarted (`device-info get DisplayCutoutsCollapsed` printed the rectangles).
+- At 104 px: no indicator on or next to the camera, nothing cut by the corners, and the pulled-down panel also keeps clear. The bar looked too tall.
+- At 95 px: the right height.
+
+**Image** `out/halium14/boot-ut.img` SHA256 `2edde0c6b6ca88b9a07577fae6ce2034dd39aba419ebd9d94f444137055ad8ba` (copy `out/halium14/boot-ut-2edde0c6.img`), kernel `#18`. It is `92c0d49f…` (item 15) plus the new `stone.yaml`, byte-identical to the tested copy. The kernel and all other ramdisk files are the same; the recovery ramdisk has the same files, only repacked. Not yet written.
+
 ## Sources
 
 - [UBports installer configs](https://github.com/ubports/installer-configs) (v2 schema, `Spacewar.yml`)
 - [halium-generic-adaptation-build-tools](https://gitlab.com/ubports/porting/community-ports/halium-generic-adaptation-build-tools) (`gsi-port-ci.yml`, `make-bootimage.sh`, `deviceinfo.sample`)
 - [devices.ubuntu-touch.io source](https://gitlab.com/ubports/infrastructure/devices.ubuntu-touch.io) (`data/devices`, `portStatus.json`, `progressStages.json`)
+- [UBports porting: Display cutouts](https://docs.ubports.com/porting/configure_test_fix/device_info/DisplayCutouts.html) (deviceinfo keys, units, the corner estimate)
 - [UBports porting introduction](https://docs.ubports.com/porting/introduction/Intro.html) and [UBports installer porting notes](https://ubports-docs-dev.readthedocs.io/en/latest/_sources/porting/finalize/UBports_installer.rst.txt)
