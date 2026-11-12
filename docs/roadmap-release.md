@@ -49,6 +49,8 @@ Checked 2026-11-11 for this document:
 10. The other stone variants.
 11. Features not yet checked: the rest of UBports' feature matrix.
 12. Security: AppArmor D-Bus and socket mediation in the kernel.
+13. Bluetooth: turning Bluetooth off and on, and reconnecting.
+14. System journal: the start of every boot is lost.
 
 ## 1. Recovery
 
@@ -502,6 +504,159 @@ What is seen (`docs/roadmap-hardware-2.md` item 8):
 Planned steps:
 1. Find the AppArmor backport other 5.4 Halium kernels use, and apply it as a kernel patch.
 2. Check that `features/dbus` appears and that dbus-daemon then mediates, and test confined apps (Morph, camera, OpenStore apps) for new denials.
+
+## 13. Bluetooth: power off and reconnect
+
+User (2026-11-11), earbuds Moondrop Nekocake (paired, `Trusted: yes`):
+1. "Connect automatically when detected" does not work: take the earbuds out, turn Bluetooth on, nothing happens; a manual connect works.
+2. Turning Bluetooth off with the earbuds connected does not disconnect them, and turning it back on does not recover the connection. The device page's "Disconnect" works.
+
+What is seen:
+- BlueZ 5.85, default `main.conf`. The adapter is `connectable`. "Connect automatically when detected" is BlueZ's `Trusted`.
+- **The toggle is an rfkill block, not BlueZ's `Powered`.** `ayatana-indicator-bluetooth` uses a `/dev/rfkill` killswitch when one exists. Here there are two Bluetooth switches: `bt_power` (the chip's power driver) and `hci0` (the vhci device that bluebinder proxies to the Android HAL). `urfkilld` also runs.
+- Kernel 5.4 `hci_rfkill_set_block()` calls `hci_dev_do_close()` at once. That drops connections on the host side only: no HCI Disconnect, and page scan stays enabled. BlueZ's own power off (mgmt) disconnects every link first, which is why "Disconnect" and `Powered=false` are clean.
+- Trace of the user's test (journal; the btmon trace script stopped early because of its own `set -e`, now fixed):
+
+  | Uptime | Event |
+  |---|---|
+  | 966.2 s | Bluetooth off. BlueZ drops its side; `hfp_ag` "not connected". |
+  | 967.4, 968.4 s | bluebinder: "Writing packet from HAL to vhci device failed: No such device or address". The controller still sends traffic for the earbud link. |
+  | 975.3 s | on |
+  | 1001.5 s | the earbuds reconnect, 26 s later (the user saw them disconnect, then connect) |
+  | 1034.1 s | off, with the earbuds in the case |
+  | 1034–1047 s | more HAL packets to the closed host while the earbuds came out |
+  | 1060.7 s | on |
+  | 1082.4 s | the earbuds connect, 22 s later (user: "roughly 30 seconds") |
+  | 1123.5 s | control: Bluetooth on, earbuds from case to connected in under 5 s |
+
+- So "off" only closes the host side. The Qualcomm controller behind bluebinder stays powered: it keeps the earbud link (issue 2) and keeps taking connection requests nobody answers, so the earbuds back off (issue 1, 20–30 s once Bluetooth is back on). Turning it on resets the controller (the kernel's HCI Reset at init), which ends the stale link.
+- BlueZ itself does not connect anything when the adapter is powered on; it only reconnects after a link loss. Android connects the last devices on Bluetooth on.
+
+Fixes:
+- **`kernel/patches/0010-bluetooth-disconnect-links-before-rfkill-close.patch`** (kernel `#18`, Image SHA256 `2d65575614ff4f587f739906adc2f63824b5ef1b127f2dc86477d8bc70f55063`; `#17` kept as `out/halium14/Image-17`). Before an rfkill block closes the device, `hci_rfkill_quiesce()`:
+  - writes Scan Enable off (BR/EDR);
+  - sends HCI Disconnect (reason 0x15, remote power off) for every connected ACL and LE link;
+  - waits up to 2 s for the Disconnection Complete events, then closes as before, and logs whether links were left.
+  This is what a mgmt power off does.
+- **`usr/lib/stone/bt-autoconnect.py`**, `stone-bt-autoconnect.service` (wanted by `bluetooth.service`). When the adapter powers on, and at start:
+  - it connects (`Device1.Connect`) the paired, trusted, unblocked audio devices that were connected when Bluetooth went off. That counts devices that disconnected up to 5 s before the power off, since the kernel now disconnects first.
+  - Otherwise it connects the last audio device used (`/var/lib/stone/bt-autoconnect.json`).
+  - It tries once, plus one retry after 10 s; a device that is not around then connects by itself.
+  - A device the user disconnected (`Device1.Disconnected` with a `.Local` reason, Bluetooth still on 5 s later) is taken off the list.
+- Live test of the service (2026-11-11): started with `systemd-run --user` (BlueZ's D-Bus policy allows any user). It found the earbuds connected and stored them as the last device.
+- Test image `out/halium14/boot-ut-test-k18.img` SHA256 `e596cbec340b8aad872aa16bc7f522ca3becc53812c7b2e65cb32135714529a7`: kernel `#18`, plus the service, on top of the overlay of `7593d35c…`. That image is what runs on `boot_b`; the local copy of its file was overwritten by this build. `out/halium14/boot-ut-983f1711.img` (kernel `#17`) is the kept fallback.
+
+Test of `e596cbec…` (2026-11-11; trace `bt-trace-1`):
+- **Bluetooth off now disconnects the earbuds** (user: step 3 passes). Kernel: `hci0: rfkill: no links left after disconnect`, both times.
+- **On reconnects them**: off at 99.7 s, on at 103.7 s, the service's `Connect` done at 105.7 s.
+- Earbuds out of the case while Bluetooth was off, then on: connected at 170.1 s, but **about 10 s after the user's toggle** (user: "a bit slow").
+  - The unblock was at 153.9 s, and the adapter only came back at 166.7 s.
+  - At the unblock bluebinder logged "binder transaction has failed: status = 2", "Remote has died, trying to reconnect", "Turning bluetooth off", and exited.
+  - systemd restarted it, `hci0` was unregistered and registered again (URfkill "removing killswitch idx 3 hci0"), bluetoothd "Failed to set mode", and the A2DP endpoints were dropped and re-added.
+  - So the Android Bluetooth HAL died while Bluetooth was off (21 s that time). It did not die during the 4 s off in step 3. Why is not known yet: logcat needs root.
+- **"Disconnect" on the device page did nothing.** There is no Disconnect in bluetoothd's log at all. Likely System Settings held the device object from before `hci0` was re-created. Not confirmed yet.
+- Service bug: the power-off disconnect at 99.7 s was taken for a user "Disconnect" ("was disconnected by the user") when its 5 s check ran at 105 s, with Bluetooth already back on. The device was then connected anyway (the power-on list had been taken before) and re-remembered. Fixed: the service now records when the adapter powered off and ignores local disconnects within 1 s of that.
+- At first boot the service had no stored "last device" yet ("reconnecting: nothing"); the earbuds connected by themselves at 89.6 s.
+
+Follow-up (2026-11-11):
+- With the service's fix installed live, the user's Disconnect (System Settings reopened) **worked**. So the earlier "Disconnect does nothing" was System Settings holding a device object from before bluebinder re-created `hci0`; it follows from the HAL death.
+- But the service did not see that Disconnect as a user action. A Disconnect sent through BlueZ (`busctl … Device1 Disconnect`, then `Connect` again) gave `Device1.Disconnected` **`org.bluez.Reason.Remote`**, "Connection terminated by remote user".
+  - BlueZ disconnects with HCI reason 0x13, and this controller echoes 0x13 in Disconnection Complete instead of 0x16 (local host). Kernel 5.4 maps the event's reason only (`hci_to_mgmt_reason()`).
+- **`kernel/patches/0011-bluetooth-report-host-initiated-disconnect-as-local.patch`** (since removed, see below) (kernel `#19`, Image SHA256 `9bfc1b6176012844cdd53d205ba73937287a7d5b5740b6015f5e13f389b46dfb`; `#18` kept as `out/halium14/Image-18`). In `hci_disconn_complete_evt()`, a connection in `BT_DISCONN` (this host sent HCI Disconnect) is reported as `MGMT_DEV_DISCONN_LOCAL_HOST`.
+  - The kernel's own idle disconnect (after the last L2CAP channel closes) also counts as local. Still to check: which reason earbuds going into the case produce. If that comes out as local, the service would forget them.
+- `logcat` gives nothing from the host, even as root: logd is only reachable inside the container. `tools/phone-debug/stone-bt-step.sh` now runs `lxc-attach -n android -- logcat` and copies tombstones and the bluebinder journal into `/home/phablet/bt-hal-log/`.
+- **The HAL death** (step 4 above):
+  - Android's init restarted `android.hardware.bluetooth@1.0-service-qti` at about 148 s, 17 s after the power off (131.0 s) and before the unblock.
+  - At the unblock (152.8 s) bluebinder still held the dead HAL and failed. Its own reconnect took 10 s ("Connected to HIDL" at 163.06 s); then it exited, systemd started a new one, and `hci0` was re-created at 166 s.
+  - The tombstones are old (camera provider, 2026-11-10); none is from the Bluetooth HAL.
+  - Not reproduced since, in three tries of the same sequence (earbuds into the case, off, out, 25 s, on) and one 30 s off with the earbuds connected: reconnect in 2–3 s each time, same HAL pid throughout.
+  - `logcat` gave 0 lines with rc 0, both through `lxc-attach` and `-d`, so the cause is unknown. `tools/phone-debug/stone-logcat-check.sh` tries each way of reading it.
+  - Also seen: while Bluetooth is off, bluebinder still logs "Writing packet from HAL to vhci device failed" now and then (1334 s, 1404 s). The controller still sends something up after the quiesce, which only stops BR/EDR scanning.
+  - Open, intermittent.
+- Test image `out/halium14/boot-ut-test-k19.img` SHA256 `a6d77dbe6aca93f336dce979d826c64bf13a4e8455c875c86d9e795b1af5ff2c`: kernel `#19` (patches 0010 and 0011, 0011 removed since; see below), plus the service with the power-off fix.
+- With `a6d77dbe…`: **the earbuds did not connect after boot** (manual connect worked).
+  - The service started at 18 s, together with bluetoothd. Its log is lost with the first 42 s of the journal.
+  - At boot the adapter appears late (bluebinder waits for the HAL; about 76 s in an earlier boot). The service only acted on a `Powered` false → true change, or on an adapter that was already powered when it started. An adapter that bluetoothd exports already powered gives neither, so nothing connected.
+  - Fixed: when `Adapter1` appears powered, or powers on within 5 s of appearing, the service waits 3 s for the paired devices to be exported, then acts as on a power on (unless something connected by itself).
+  - Adapter removal (bluebinder re-creating `hci0` after a HAL death) now counts as a power off, so the devices connected then are reconnected when it comes back.
+  - It also logs its start state.
+  - Live test: `tools/phone-debug/stone-bt-autoconnect-test.sh` runs it from `/usr/local/lib/stone-test/` through a drop-in (the image restores `/usr/lib/stone/` at boot), and restarts bluebinder to re-create `hci0`.
+- Live test of that fix (2026-11-11):
+  - Reboot with the earbuds out: the service started at 73.9 s (no adapter yet); the adapter appeared at 76.6 s (unpowered) and powered on at 80.0 s; connect at 81.0 s, **connected at 81.8 s**.
+  - bluebinder restart: adapter removed → "powered off; were connected: Moondrop Nekocake" → appeared → reconnect. Both attempts failed with `br-connection-page-timeout`; the earbuds then reconnected by themselves. An abrupt loss (no HCI Disconnect) leaves the remote believing it is connected until its supervision timeout, often about 20 s. The service now makes 3 attempts, 10 s apart.
+- **Patch 0011 did not help, and was removed.** With kernel `#19`, a `Device1.Disconnect` still gave `org.bluez.Reason.Remote`.
+  - BlueZ's Disconnect closes the profiles first and only sends the HCI Disconnect after a 2 s timer. These earbuds drop the link themselves as soon as the profiles are closed, so the disconnect really is remote at the HCI level; no reason mapping can show a user's Disconnect.
+  - 0011 is reverted in the tree and its patch file deleted. The image goes back to kernel `#18` (`out/halium14/Image-18`, copied to `kernel/build-14/arch/arm64/boot/Image`). The objects in `kernel/build-14` are still `#19`'s, so the next incremental build rebuilds `hci_event.o` and is numbered `#20`.
+- Instead, the service now watches the calls themselves: a second system bus connection with `org.freedesktop.DBus.Monitoring.BecomeMonitor` for `org.bluez.Device1` `Disconnect` and `DisconnectProfile` (both used by System Settings' Bluetooth panel). This needs root, which the service has.
+  - 5 s after such a call, if the device is still disconnected and Bluetooth is on, the device is dropped from the "last used" list.
+  - The `Disconnected` signal and its reason are no longer used.
+- Live test of the monitor (2026-11-11; `stone-bt-autoconnect-test.sh --no-restart`, kernel `#19` still running):
+  - It started without the "cannot watch" warning.
+  - `Device1.Disconnect` via `busctl` (as phablet): 5 s later "Moondrop Nekocake was disconnected by the user; not reconnecting it", and the list became empty. `Connect` put the device back.
+  - BlueZ power off and on (`Adapter1.Powered` false, then true, via `busctl`): "powered off; were connected: Moondrop Nekocake", "powered on; reconnecting", connected on the first attempt; the device stayed in the list.
+- User tests with it (2026-11-11), both passed:
+  - "Disconnect" in System Settings, 10 s, then Bluetooth off and on: the earbuds stayed disconnected.
+  - Earbuds into the case, Bluetooth off, out, 10 s, on: connected within a few seconds.
+
+**Image** `out/halium14/boot-ut.img` SHA256 `d9184e3c39a48130599ada3d603cf9f2330f90277016db0d54d3bc41f19a60b3` (copy `out/halium14/boot-ut-d9184e3c.img`), kernel `#18` (`2d655756…`, patches 0001–0010). Compared with `7593d35c…` it adds:
+- kernel patch 0010 (clean disconnect before an rfkill block);
+- `stone-bt-autoconnect.service` and `bt-autoconnect.py`, byte-identical to the tested copy (SHA256 `01718eec…`);
+- init cleanup of the auto-connect test files.
+
+Not yet written.
+
+Still open:
+- the intermittent Bluetooth HAL death while Bluetooth is off (seen once; the recovery is now automatic but takes about 13 s);
+- empty `logcat`;
+- earlier-found journal loss before the NTP sync.
+
+
+## 14. System journal: the start of every boot is lost
+
+The system journal never held the first ~40 s of a boot (everything before the NTP sync). That cost data in item 2 (USB), item 13 (Bluetooth) and earlier.
+
+What is seen (2026-11-11, image `d9184e3c…`, kernel `#18`):
+- `journald.conf.d`: `SystemMaxUse=500M` (`50-ubuntu-touch.conf`, lxc-android-config), `ReadKMsg=no`, `ForwardToSyslog=yes`.
+- **The journal sits at its cap** (498.8 MB), and **there is no archived system journal at all**: only the active `system.journal` (8 MB). The other 93 files (491 MB) are `user-32011` (phablet) and `user-1001` (radio, i.e. ofono) journals from 2026-11-10 and -11.
+  - They are not busy: about 2,500 lines an hour for phablet (lomiri, maliit-server, media-hub-server) and 775 for radio (ofono). The space is many mostly empty 8 MB files, two per boot.
+- The active `system.journal` starts **at the NTP sync** (head realtime 23:08:46, "Initial clock synchronization" at 42.8 s) and held 271 entries.
+- **Why system files are lost.** journald's vacuuming orders archived files by sequence number when they belong to the same series, and otherwise by their first timestamp. Each boot starts a new series, and its system journal starts with 1970 timestamps, so files from earlier boots that start in 1970 always come first.
+  - At the NTP jump the current boot's file is closed too. It is then the oldest by timestamp, and goes at the next vacuum, while user files from earlier boots (which start after the clock was right) stay.
+- **Why 1970:**
+  - The Qualcomm RTC cannot be set; `/sys/class/rtc/rtc0/since_epoch` is 1210362 (14 days).
+  - UBports' `timekeeper.service` (`/usr/sbin/timekeeper`) stores the offset to real time in `/data/time/timekeep` (= `/var/lib/android-data/time/timekeep`) at shutdown, and restores it at about 11.9 s. The stored offset is right: 1210362 + 1793246372 = now.
+  - But at about 14 s the Android container starts the vendor's **`time_daemon`** (`/vendor/bin/time_daemon`, `CAP_SYS_TIME`, `settimeofday`). It sets the clock from the RTC plus its own offsets (`ats_*` in `/data/vendor/time`), which Android's framework updates and Ubuntu Touch never does. adbd's own timestamp at 16.6 s was "01-14 17:40", neither the RTC nor today.
+  - systemd-timesyncd's restore from its timestamp file only happens at its start (12 s), and nothing corrects the clock again until NTP.
+
+Fix:
+- **`boot/ut-init/init`**: before `switch_root`, set the clock to RTC + `timekeep` offset (via the root filesystem's Python, `time.clock_settime`), only when the result is after 2020-01-01. The init logs it to the kernel log ("clock set to …").
+- **`usr/lib/stone/clock-guard.py`**, `stone-clock-guard.service` (`sysinit.target`, before `lxc-android-config`):
+  - It waits on a `timerfd` with `TFD_TIMER_CANCEL_ON_SET`, which wakes on every clock change; no polling (ctypes, since Python 3.12 has no `os.timerfd_*`).
+  - When the clock is before 2020, it sets RTC + offset again and runs `journalctl --rotate`, so any entries stamped in between stay in a file of their own.
+  - Nothing legitimate sets a phone's clock before 2020.
+- Live install: `tools/phone-debug/stone-clock-guard-install.sh`. A live install has no init part: the first seconds before the guard starts are still stamped 1970.
+
+Live test of the guard (2026-11-11, image `d9184e3c…`, so without the init part):
+- **time_daemon confirmed.** At 14.96 s the guard logged "clock changed: clock was Wed Jan 14 19:18:57 1970; set back to RTC + offset, Wed Nov 11 23:18:29 2026", and rotated the journal.
+- The boot's journal now starts at **12.1 s** instead of 42 s.
+  - Archived file 12.1–14.96 s (head 23:18:26, correct, kept); active `system.journal` from 23:18:29.
+  - Still lost: 0–12.1 s, including the guard's own correction at its start (3.3 s).
+  - Until the flush to `/var`, journald writes to `/run`. The flush copies those entries, starting with 1970 ones, into the persistent file, so that file starts in 1970. timekeeper's restore at 12.1 s closed it, and it went at the next vacuum.
+  - Hence the init part: nothing may ever be stamped 1970.
+
+Test image `out/halium14/boot-ut-test-clock.img` SHA256 `663a4d80ae984d3c4e772dd7bd8564d926c9dbbf14e877167dc1d69abd951386`: `d9184e3c…` plus the init clock setting and the guard (byte-identical to the live-installed copy), kernel `#18`.
+
+Test of `663a4d80…` (2026-11-12):
+- **The journal starts at 3.17 s** ("Journal started", the first entry journald can have; `ReadKMsg=no`, so no kernel lines), stamped 2026-11-12 00:20:29, with **no 1970 entries** in the boot.
+  - timekeeper (about 12 s) and the guard (3.34 s) come later, so the init set the clock.
+  - Its own "clock set" line had already left the kernel log buffer.
+- The guard caught time_daemon again at 15.0 s ("clock was Wed Jan 14 20:21:09 1970; set back … Thu Nov 12 00:20:41 2026").
+- The system journal is now several files, all with correct head times: the previous boot's files (23:18:26, 23:18:29) and this boot's (00:20:29, 00:20:38 and the active 00:20:41). timekeeper's restore and the guard's rotation each close one, and none is deleted early.
+- **The previous boot survived the reboot**: boot −1 (the guard-only boot) still has 3153 entries, from 12.1 s to its shutdown an hour later; boot −2 is listed too. Until now a previous boot's system journal never survived.
+- The cap (`SystemMaxUse=500M`, 501 MB in use) still applies. Vacuuming now drops the oldest files across all users instead of the system's newest.
+- After one more reboot: boot −1 (the first boot of `663a4d80…`) has **4027 entries, from "Journal started" at 3.17 s to "Journal stopped" at its shutdown (203 s), no 1970 entries**. Boot 0 starts at 3.11 s, and the guard caught time_daemon again.
+
+Item 14 is done. `out/halium14/boot-ut-test-clock.img` (`663a4d80…`) is the current image, written and confirmed. It is built from the current sources and includes the Bluetooth work of item 13 (`d9184e3c…`, whose own file is kept as `out/halium14/boot-ut-d9184e3c.img`).
 
 ## Sources
 

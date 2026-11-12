@@ -1,0 +1,64 @@
+diff --git a/net/bluetooth/hci_core.c b/net/bluetooth/hci_core.c
+index d3862da05..329767fdc 100644
+--- a/net/bluetooth/hci_core.c
++++ b/net/bluetooth/hci_core.c
+@@ -2161,6 +2161,47 @@ int hci_get_dev_info(void __user *arg)
+ 
+ /* ---- Interface to HCI drivers ---- */
+ 
++/* An rfkill block closes the device at once, and hci_dev_do_close() only
++ * drops connections on the host side. With a controller that stays powered
++ * after the host closes (a vhci proxy to a vendor HAL, such as bluebinder),
++ * remote devices then stay connected to a host that is gone, and the
++ * controller keeps page scanning and taking connection requests nobody
++ * answers. Do what a management power off does first: stop scanning and
++ * disconnect every link, then wait (bounded) for the disconnections.
++ */
++static void hci_rfkill_quiesce(struct hci_dev *hdev)
++{
++	struct hci_conn *conn;
++	int i;
++
++	if (!test_bit(HCI_UP, &hdev->flags))
++		return;
++
++	if (hci_dev_test_flag(hdev, HCI_BREDR_ENABLED)) {
++		u8 scan = SCAN_DISABLED;
++
++		hci_send_cmd(hdev, HCI_OP_WRITE_SCAN_ENABLE, 1, &scan);
++	}
++
++	hci_dev_lock(hdev);
++	list_for_each_entry(conn, &hdev->conn_hash.list, list) {
++		if (conn->type != ACL_LINK && conn->type != LE_LINK)
++			continue;
++		if (conn->state == BT_CONNECTED || conn->state == BT_CONFIG)
++			hci_disconnect(conn, HCI_ERROR_REMOTE_POWER_OFF);
++	}
++	hci_dev_unlock(hdev);
++
++	for (i = 0; i < 100; i++) {
++		if (!hci_conn_num(hdev, ACL_LINK) && !hci_conn_num(hdev, LE_LINK))
++			break;
++		msleep(20);
++	}
++	BT_INFO("%s: rfkill: %s links left after disconnect", hdev->name,
++		hci_conn_num(hdev, ACL_LINK) + hci_conn_num(hdev, LE_LINK) ?
++		"some" : "no");
++}
++
+ static int hci_rfkill_set_block(void *data, bool blocked)
+ {
+ 	struct hci_dev *hdev = data;
+@@ -2173,8 +2214,10 @@ static int hci_rfkill_set_block(void *data, bool blocked)
+ 	if (blocked) {
+ 		hci_dev_set_flag(hdev, HCI_RFKILLED);
+ 		if (!hci_dev_test_flag(hdev, HCI_SETUP) &&
+-		    !hci_dev_test_flag(hdev, HCI_CONFIG))
++		    !hci_dev_test_flag(hdev, HCI_CONFIG)) {
++			hci_rfkill_quiesce(hdev);
+ 			hci_dev_do_close(hdev);
++		}
+ 	} else {
+ 		hci_dev_clear_flag(hdev, HCI_RFKILLED);
+ 	}

@@ -1,0 +1,17 @@
+[Unit]
+Description=Keep the clock from being set back to 1970 (Qualcomm time_daemon)
+# See /usr/lib/stone/clock-guard.py. Running before the Android container,
+# whose time_daemon sets the clock at about 14 s.
+DefaultDependencies=no
+After=systemd-journald.service local-fs.target
+Before=lxc-android-config.service sysinit.target shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/var/lib/android-data
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/clock-guard.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=sysinit.target

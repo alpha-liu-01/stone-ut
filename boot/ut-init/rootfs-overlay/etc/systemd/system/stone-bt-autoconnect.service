@@ -1,0 +1,13 @@
+[Unit]
+Description=Reconnect Bluetooth audio devices when Bluetooth is turned on
+# See /usr/lib/stone/bt-autoconnect.py.
+After=bluetooth.service
+PartOf=bluetooth.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/lib/stone/bt-autoconnect.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=bluetooth.service

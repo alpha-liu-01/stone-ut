@@ -141,6 +141,8 @@ for f in \
     usr/local/sbin/stone-boot-trace.sh \
     usr/local/lib/stone-test/usb-mtp-reconnect.py \
     etc/systemd/user/stone-usb-mtp-reconnect.service.d/zz-stone-test.conf \
+    usr/local/lib/stone-test/bt-autoconnect.py \
+    etc/systemd/system/stone-bt-autoconnect.service.d/zz-stone-test.conf \
     etc/systemd/system/multi-user.target.wants/stone-usb-mtp-reconnect.service \
     etc/systemd/system/stone-usb-mtp-reconnect.service \
     usr/lib/stone/usb-mtp-reconnect.sh \
@@ -198,6 +200,34 @@ chroot /newroot /usr/bin/python3 /stone/dynparts.py \
 cp /stone-vendor-fixups.py /newroot/stone/vendor-fixups.py
 chroot /newroot /usr/bin/python3 /stone/vendor-fixups.py \
     > /newroot/stone-vendor-fixups.txt 2>&1
+
+# Wall clock (docs/roadmap-release.md item 14). The Qualcomm RTC cannot be set
+# and counts from 1970; UBports' timekeeper keeps the offset to real time in
+# /data/time/timekeep (= /var/lib/android-data/time/timekeep), stored at
+# shutdown, but only restores it at about 12 s. Until then journald stamps
+# everything with 1970, and its vacuuming, which orders files from different
+# boots by their first timestamp, then deletes the start of each boot first.
+# Set RTC + offset now, before systemd starts.
+RTC=$(cat /newroot/sys/class/rtc/rtc0/since_epoch 2>/dev/null)
+OFF=$(cat /newroot/var/lib/android-data/time/timekeep 2>/dev/null)
+case "$RTC:$OFF" in
+[0-9]*:[0-9]*)
+    case "$RTC$OFF" in
+    *[!0-9]*) log "clock not set: unexpected RTC '$RTC' or offset '$OFF'" ;;
+    *)
+        T=$((RTC + OFF))
+        # Only a plausible result (after 2020-01-01).
+        if [ "$T" -gt 1577836800 ] && chroot /newroot /usr/bin/python3 -I -c \
+            'import sys, time; time.clock_settime(time.CLOCK_REALTIME, float(sys.argv[1]))' "$T"; then
+            log "clock set to $T (RTC $RTC + timekeep offset $OFF)"
+        else
+            log "clock not set (RTC $RTC + offset $OFF)"
+        fi
+        ;;
+    esac
+    ;;
+*) log "clock not set: no RTC or no timekeep offset" ;;
+esac
 sync
 
 log "switch_root to $NEXT_INIT"
