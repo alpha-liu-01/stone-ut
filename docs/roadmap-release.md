@@ -626,7 +626,7 @@ Planned steps:
 **Image** `out/halium14/boot-ut.img` SHA256 `3cdee49b2e411e6014bc86469f473108d50c7a818685c4dca2a27c161a18714f` (copy `boot-ut-3cdee49b.img`), kernel `#20`.
 - It is `82f5c1d5…` plus the flashlight toggle (`docs/roadmap-hardware-2.md` item 5: `torch.py`, `stone-torch.service`, the deviceinfo keys) and the new `tested-versions.txt`.
 - Kernel and recovery identical; `torch.py`, the unit and `stone.yaml` byte-identical to the tested ones.
-- Not yet written.
+- Written and confirmed on 2026-11-12: `stone-torch.service` started before lightdm, and the Flashlight switch works (user).
 
 ## 8. UBports Installer
 
