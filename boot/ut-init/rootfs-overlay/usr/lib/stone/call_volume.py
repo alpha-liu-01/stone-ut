@@ -12,7 +12,10 @@ ADSP_EFAILED ("voice volume failed" in the kernel log on every call). So:
   media.role=phone is kept open; module-stream-restore gives it the saved
   phone role volume, and the indicator's volume keys change that;
 - its volume is mapped to the codec's digital gain on the interpolator that
-  carries the call to the active output (1 dB per step, 84 = 0 dB).
+  carries the call to the active output (1 dB per step, 84 = 0 dB);
+- on the Bluetooth port the call does not pass the codec: the volume goes to
+  the headset's own speaker gain (HFP +VGS, 0-15), through ofono's
+  org.nemomobile.ofono.bluetooth.CallVolume, which the router sets for us.
 
 libpulse is used through ctypes on the router's GLib main loop
 (libpulse-mainloop-glib), so changes arrive as events.
@@ -25,13 +28,16 @@ import subprocess
 
 # sink.primary port -> codec digital volume controls carrying the call.
 # USB and Bluetooth calls leave the DSP for the device without passing the
-# codec: their volume is the device's own.
+# codec. For Bluetooth the headset's speaker gain is set instead (BT_PORT);
+# USB headsets keep their own volume.
 ROUTE_CONTROLS = {
     "[Out] Earpiece": ["RX_RX0 Digital Volume"],
     "[Out] Speaker": ["RX_RX2 Digital Volume"],
     "[Out] Headphones": ["RX_RX0 Digital Volume", "RX_RX1 Digital Volume"],
 }
 UNITY = 84                    # 0 dB
+BT_PORT = "[Out] Bluetooth"
+HFP_MAX = 15                  # HFP speaker gain range 0-15
 MIN_DB = -40                  # lowest audible setting
 MAX_DB_FILE = os.path.expanduser("~/.config/stone/call-volume-max-db")
 MAX_DB_DEFAULT = 6
@@ -151,6 +157,15 @@ def gain_for(volume, muted):
     return int(round(UNITY + db))
 
 
+def hfp_gain_for(volume, muted):
+    """HFP speaker gain (0-15) for a phone-role volume: linear in the slider,
+    so the indicator's steps map to 0, 3, 5, 8, 10, 13, 15 and the phone role
+    default (56 %) to 8."""
+    if muted or volume == 0:
+        return 0
+    return max(0, min(HFP_MAX, int(round(HFP_MAX * volume / PA_VOLUME_NORM))))
+
+
 def set_controls(controls, value, log):
     for name in controls:
         r = subprocess.run(["amixer", "-q", "-D", MAIN_CARD, "cset", "name=%s" % name, str(value)],
@@ -162,8 +177,10 @@ def set_controls(controls, value, log):
 class CallVolume:
     """Keeps the phone-role stream while enabled and applies its volume."""
 
-    def __init__(self, log):
+    def __init__(self, log, set_hfp_gain=None):
         self.log = log
+        self.set_hfp_gain = set_hfp_gain   # callable(gain) -> bool, or None
+        self.hfp_applied = None
         self.ml = pa_glib.pa_glib_mainloop_new(None)   # default GMainContext
         self.api = pa_glib.pa_glib_mainloop_get_api(self.ml)
         self.ctx = None
@@ -318,5 +335,14 @@ class CallVolume:
             self.log("call volume: %d%%%s on %s -> %s" % (
                 round(100 * vol / PA_VOLUME_NORM), " muted" if muted else "", self.port,
                 ", ".join("%s=%d (%+d dB)" % (n, v, v - UNITY) for n, v in sorted(changed.items()))))
-        elif self.want and self.volume is not None and self.port not in ROUTE_CONTROLS:
-            pass   # USB/Bluetooth: the device's own volume
+        # Bluetooth: the headset's speaker gain (set again for each call).
+        if self.want and self.volume is not None and self.port == BT_PORT and self.set_hfp_gain:
+            vol, muted = self.volume
+            gain = hfp_gain_for(vol, muted)
+            if gain != self.hfp_applied and self.set_hfp_gain(gain):
+                self.hfp_applied = gain
+                self.log("call volume: %d%%%s on %s -> headset speaker gain %d/%d" % (
+                    round(100 * vol / PA_VOLUME_NORM), " muted" if muted else "", self.port,
+                    gain, HFP_MAX))
+        elif not (self.want and self.port == BT_PORT):
+            self.hfp_applied = None   # send it again when a call reaches Bluetooth

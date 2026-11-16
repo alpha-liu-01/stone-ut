@@ -56,6 +56,7 @@ Done here: rotation and all sensors (item 1), USB MTP with adb alongside (item 2
 11. 120 Hz display. Added 2026-11-11: the panel ran at 120 Hz, but the UI never got past 60 fps. Two causes: the system compositor waited for the previous frame's present fence after every frame (two vsyncs per frame), and the GPU governor kept the GPU at 266 MHz while scrolling. Fixed with `stone-display-setup.service` and kernel `#15` (the 60 Hz panel command). The 60/120 Hz choice is in System Settings > Brightness (and `stone-refresh-rate`). Done 2026-11-11.
 
 12. Wi-Fi network list. Added 2026-11-12: every network appeared twice in the network indicator and in System Settings, because NetworkManager also managed the driver's second station interface `wlan1`. Fixed by leaving `wlan1` unmanaged. Done 2026-11-12.
+13. Bluetooth after a few days of use. Added 2026-11-16: paired devices seemed forgotten (a byte-reversed adapter address on some boots), an LE keyboard typed nothing (`/dev/uhid` permissions), and the volume keys did nothing in Bluetooth calls. All three fixed; a stuck call (ofono's SCO connect) is still open.
 
    None of these has been checked yet.
 
@@ -1041,3 +1042,74 @@ Live test (2026-11-12): the file was installed and NetworkManager reloaded (`sys
 - `p2p-dev-wlan1` stayed as "unavailable" until the next boot; it is not listed as a network.
 
 Image `out/halium14/boot-ut.img` SHA256 `69b9f797631eae7d3b1dae005aafcb09c9d2918a4414b4801a63bb91825ba75a` (copy `boot-ut-69b9f797.img`), kernel `#20`. It is `3cdee49b…` plus this file, byte-identical to the tested one; kernel and recovery identical. Written and confirmed on 2026-11-12 (user): each network shows once.
+
+## 13. Bluetooth after a few days of use
+
+User report (2026-11-16), after a few days of use:
+- Paired devices were gone (a mechanical keyboard, a BETOP T6 and a "Wireless Controller"); only the earbuds, re-paired, were listed, and nothing auto-connected.
+- Then, once the address was fixed: the keyboard connected but typing did nothing (it works wired).
+- Bluetooth calls: no volume control; one call could not be hung up, and later calls had no Bluetooth audio. Music was quiet at first, normal later.
+
+### Lost pairings: the address changed
+
+What is seen:
+- `/var/lib/bluetooth` had two adapter folders. They hold the same six bytes in opposite order. All four devices were in the folder of the address in `persist.vendor.service.bdroid.bdaddr`'s byte order. The adapter ran on the reversed address, whose folder only had the re-paired earbuds.
+- BlueZ keeps pairings per adapter address. A remote device only accepts the address it paired with (BR/EDR link keys are bound to both addresses), so the folders cannot simply be merged.
+- Nothing on the Ubuntu side applies an address. `bluebinder_post.sh` writes the property reversed into `/var/lib/bluetooth/board-address` once, and nothing reads that file. The address comes from the vendor HAL, `android.hardware.bluetooth@1.0-impl-qti.so`. Its strings show its sources:
+  - the file named by `ro.vendor.bt.bdaddr_path`;
+  - `ro.vendor.bt.boot.macaddr`;
+  - `persist.vendor.service.bdroid.bdaddr`;
+  - the modem's NV (QMI: "Read MODEM_NV_BD_ADDR", "Failed to set MODEM_NV_BD_ADDR in prop %s");
+  - a random address.
+
+  It writes what it used back into the property: `persistent_properties` was rewritten the second bluebinder brought Bluetooth up.
+- So depending on the path the HAL took (property or modem NV), the controller got one byte order or the other. `docs/roadmap-hardware.md` item 6 had "stable across boots" on 2026-11-10; the reversal was first noticed on 2026-11-11, the day of the HAL deaths (`docs/roadmap-release.md` item 13).
+- AOSP's `bluetooth_address.cc` reads the `bdaddr_path` file first, and the HAL has the same three property names in that order.
+
+Fix: `usr/lib/stone/bt-address.sh`, `stone-bt-address.service` (after `lxc-android-config`, before `bluebinder`, wanted by `bluebinder.service`).
+- It keeps one canonical address in `/var/lib/stone/bt-bdaddr`. That address is taken once: from an existing `/data/vendor/bluetooth/bdaddr`, else from the property.
+- At every boot it writes that address to `/var/lib/android-data/vendor/bluetooth/bdaddr` (1002:1002, 0644) and sets `ro.vendor.bt.bdaddr_path` to it with `setprop` in the container. The property is unset in this vendor, so the one-time set works; the script retries for up to 30 s while the container's property service comes up.
+- Tools: `tools/phone-debug/stone-bt-address-debug.sh` (where the address comes from; addresses masked) and `stone-bt-address-test.sh` (the runtime version of the fix: file, `setprop`, bluebinder restart).
+- Live test (2026-11-16): after a bluebinder restart the adapter came up with the property's byte order. BlueZ listed all four devices again; the controllers and the earbuds connected (user).
+
+### LE keyboard typed nothing: /dev/uhid
+
+- The keyboard is Bluetooth LE (HID over GATT, service `0x1812`). BlueZ creates the input device for an LE HID device itself, through `/dev/uhid`. The BETOP T6 is classic HID, handled in the kernel by `hidp`, and had its input device (`event7`); the keyboard had none.
+- `70-sunstone.rules` (generated from Android's `ueventd.rc`) makes `/dev/uhid` 0660 `3011:3011` (AID uhid). bluetoothd runs as root, but `bluetooth.service` bounds it to `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE` (`CapEff 0x1400`). Without `CAP_DAC_OVERRIDE` it cannot open the node.
+- Fix: `etc/udev/rules.d/71-stone-uhid.rules`, `OWNER="0"` for `uhid`, after the generated rules. The group 3011 and the mode stay.
+- Live test: after `udevadm trigger`, `/dev/uhid` was `root:3011`. The keyboard, reconnected, typed (user).
+
+### Bluetooth call volume
+
+- In-call volume (item 9) sets codec gain, and a Bluetooth call does not pass the codec. The HCI trace of two calls had no `+VGS` at all.
+- Sailfish ofono's `sailfish_bt` plugin has `org.nemomobile.ofono.bluetooth.CallVolume` on each modem: `SetProperty("SpeakerVolume", byte 0–15)` sends `+VGS` to the connected headset. As phablet it is allowed.
+- Fix:
+  - `call_volume.py` maps the phone-role volume on `[Out] Bluetooth` to the headset gain, linear in the slider (the indicator's steps give 0, 3, 5, 8, 10, 13, 15; the role default gives 8). It sends it again for each call.
+  - `call-audio-router.py` sets it on the call's modem (`/ril_0` or `/ril_1`).
+  - Codec routes are unchanged.
+- Live test (2026-11-16, `tools/phone-debug/stone-bt-call-volume-install.sh`): a call on the earbuds stepped "headset speaker gain 5/15 … 15/15" and back with the volume keys, on an mSBC link (`KHZ_16`); the user heard it.
+- Not done: the reverse direction (the earbuds' own volume buttons send `AT+VGS`; the plugin emits `PropertyChanged`, which could set the phone role volume).
+
+### The stuck call (open)
+
+- The first call after a quiet period (incoming, 7667 s of uptime):
+  - ofono and the earbuds negotiated mSBC (`+BCS: 2`, `AT+BCS=2`);
+  - the kernel sent no setup at all (no "mSBC:" line, no SCO link);
+  - PulseAudio's `Acquire` timed out ("NoReply", 7730 s), and every later `Acquire` got `org.ofono.Error.InProgress` until the earbuds reconnected.
+
+  This is the hang of 2026-11-11 (item 9, "Still open"), which had not come back until now.
+- 5.4's `hci_connect_sco()` defers the setup while a sniff exit is pending (`HCI_CONN_MODE_CHANGE_PEND` → `HCI_CONN_SCO_SETUP_PEND`, run from the Mode Change event), and nothing times it out. The earlier good trace shows exactly that order: Exit Sniff Mode, Mode Change (Active) 240 ms later, then Enhanced Setup.
+- Suspected: a lost Mode Change event (bluebinder does drop controller events now and then, "Writing packet from HAL to vhci device failed"), which would also leave the flag set and block every later call on that link.
+- A traced retry (`stone-bt-call-debug.sh`, 2026-11-16) did not reproduce it: the earbuds were not in sniff mode, and both calls got eSCO mSBC links at once.
+- Next time: start the trace before the call. A kernel-side timeout for `HCI_CONN_SCO_SETUP_PEND` is the likely fix, once a trace confirms the cause.
+
+### Quiet music (open)
+
+- A2DP was quiet at first (3/4 of the slider was "acceptable") and normal after a call. Not investigated yet. Since the address fix the earbuds use their older pairing, which may carry a different stored volume (AVRCP absolute volume, or PulseAudio's per-device volume).
+
+Also seen: ofono now logs every binder radio message as a hex dump (`ofonod-wrapper`, `imsradio0`), which buries everything else in its journal. It does not come from this port's configuration (no `-d`, nothing in `binder.conf`). It may have come with the 2026-11-12 upgrade of `ofono-binder-plugin`; not looked at yet.
+
+Image `out/halium14/boot-ut.img` SHA256 `99d80009607e497e27f9b53810e8ec35c8bde2eeb6d163cd10850258b5590cbf` (copy `boot-ut-99d80009.img`), kernel `#20`.
+- It is `69b9f797…` plus `bt-address.sh` and its service, `71-stone-uhid.rules`, and the new `call_volume.py` and `call-audio-router.py`.
+- The last three are byte-identical to the tested files. `bt-address.sh` gets its first real run at the first boot: it should adopt the address file from the live test as canonical.
+- Kernel and recovery identical. Not yet written.

@@ -1,0 +1,15 @@
+[Unit]
+Description=Fixed Bluetooth address for the vendor HAL
+# See /usr/lib/stone/bt-address.sh. Needs the Android container (setprop);
+# must run before bluebinder, which starts the HAL and so sets the address.
+After=lxc-android-config.service
+Wants=lxc-android-config.service
+Before=bluebinder.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/stone/bt-address.sh
+
+[Install]
+WantedBy=bluebinder.service

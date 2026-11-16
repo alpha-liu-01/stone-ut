@@ -123,7 +123,7 @@ class Router:
         self.post_call_until = 0.0  # see prefer_usb_defaults()
         # In-call volume: phone role stream -> codec gain (call_volume.py).
         try:
-            self.call_volume = call_volume.CallVolume(log)
+            self.call_volume = call_volume.CallVolume(log, self.set_hfp_gain)
         except OSError as e:
             log("call volume unavailable: %s" % e)
             self.call_volume = None
@@ -429,6 +429,19 @@ class Router:
         subs = {2 if path.startswith("/ril_1/") else 1
                 for path, state in self.calls.items() if state in VOICE_STATES}
         return 2 if subs == {2} else 1
+
+    def set_hfp_gain(self, gain):
+        """Headset speaker gain (HFP +VGS) through ofono's sailfish_bt plugin,
+        on the modem of the call (SIM 1 /ril_0, SIM 2 /ril_1)."""
+        modem = "/ril_1" if self.voice_sub() == 2 else "/ril_0"
+        try:
+            dbus.Interface(self.bus.get_object("org.ofono", modem),
+                           "org.nemomobile.ofono.bluetooth.CallVolume").SetProperty(
+                "SpeakerVolume", dbus.Byte(gain))
+            return True
+        except dbus.DBusException as e:
+            log("call volume: headset speaker gain on %s: %s" % (modem, e.get_dbus_message()))
+            return False
 
     def start(self):
         if self.port == BT_PORT:
