@@ -1,6 +1,5 @@
 # Roadmap items 4 (remainder) and 5
 
-English translation of `docs/roadmap-04-05.md`. The Chinese file is the source of record.
 
 Scope is the unfinished part of item 4 in `docs/feasibility.md`, plus the part of item 5 that says "get a Droidian root filesystem ready." The goal stops at images sitting on disk. Do not format userdata, do not flash, and do not reboot.
 
