@@ -1018,6 +1018,22 @@ Live test (2026-11-12): the yaml was copied to `/etc/deviceinfo/devices/stone.ya
 
 **Image** `out/halium14/boot-ut.img` SHA256 `2edde0c6b6ca88b9a07577fae6ce2034dd39aba419ebd9d94f444137055ad8ba` (copy `out/halium14/boot-ut-2edde0c6.img`), kernel `#18`. It is `92c0d49f…` (item 15) plus the new `stone.yaml`, byte-identical to the tested copy. The kernel and all other ramdisk files are the same; the recovery ramdisk has the same files, only repacked. Never written: `16bfa7b0…` (item 3) includes it and was written on 2026-11-12.
 
+Follow-up (2026-11-16): **a gap right of the camera, sometimes.** With the phone plugged in, the space right of the camera was often empty and the icons crowded to its left. Unlocking sometimes fixed it; unplugging and plugging in brought it back.
+- Lomiri's `PanelItemRow.qml` (`recalculateItems()`) places the indicators one by one from the clock leftwards. An item that would overlap a cutout is moved past it, and the space it did not fit into stays empty. A width change re-runs the layout (`widthChanged` is connected); hidden indicators have width 0.
+- Measured on two screenshots:
+  - Unplugged, the network indicator (signal and Wi-Fi, one item) started about 15 px right of the camera area.
+  - Charging, the battery item is 16 px wider (the bolt). That pushed the network item 1 px into the camera area, and it jumped left, leaving about 128 px empty.
+  - A two-digit hour (10:00–12:59) is about 22 px wider and would do the same.
+- **Fix:** tighter collapsed cutouts in `stone.yaml`:
+  - camera `509 0 62 95` (6 px either side of the 50 px hole; the items' own padding still keeps about 16 px visible);
+  - right corner `1056 0 24 95` (only the clock sits there; at the height of its text the curve is about 25 px deep, and UBports' guide allows the clock a slight overlap);
+  - left corner and the expanded cutouts unchanged.
+
+  Room right of the camera: 46 px instead of 15.
+- Live test (`/etc/deviceinfo/devices/stone.yaml`, Lomiri restarted): charging, the network item starts 31 px right of the camera area, and the clock text ends 14 px before the corner area. The layout stayed put while plugging and unplugging (user).
+- The flashlight keys had been inserted in the middle of the cutout comment in `stone.yaml`; the file is tidied.
+- Image `out/halium14/boot-ut.img` SHA256 `16e2850bf2d8e3fddba7da3b29ee4d06daec2606fcb61206bdcfc9b3af915f7c` (copy `boot-ut-16e2850b.img`), kernel `#20`. It is `99d80009…` (`docs/roadmap-hardware-2.md` item 13) plus this `stone.yaml`, byte-identical to the tested one; kernel and recovery identical. Not yet written.
+
 ## 17. Unofficial distribution
 
 Goal: people can install, update and get the sources of the port without anyone at UBports approving anything.

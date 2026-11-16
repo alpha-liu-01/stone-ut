@@ -7,24 +7,29 @@ stone:
   PrettyName: Xiaomi Redmi Note 12 5G
   DeviceType: phone
   OfonoPlugin: binder
-  # Front camera punch-hole (docs/roadmap-release.md item 16). Physical
-  # pixels on the 1080x2400 panel; the vendor overlay (FrameworksResOverlayStone,
-  # config_mainBuiltInDisplayCutout) puts a 50 px circle at x 515-565, y 27-77,
-  # below Lomiri's default 63 px (3 gu) panel. 95 px covers it with a margin;
-  # Android's 104 px (status_bar_height_portrait) looked too tall.
-  # Lomiri keeps indicators out of these rectangles (x y width height): the
-  # camera with some room on each side, and the rounded corners (radius 102 px).
   # Flashlight toggle in the battery indicator (ayatana-indicator-power's
   # simple backend). The file is a bridge to the camera HAL's torch mode,
   # served by stone-torch.service (/usr/lib/stone/torch.py).
   FlashlightSysfsPath: /run/stone-torch/torch
   FlashlightSimpleEnableValue: "1"
   FlashlightSimpleDisableValue: "0"
+  # Front camera punch-hole (docs/roadmap-release.md item 16). Physical
+  # pixels on the 1080x2400 panel; the vendor overlay (FrameworksResOverlayStone,
+  # config_mainBuiltInDisplayCutout) puts a 50 px circle at x 515-565, y 27-77,
+  # below Lomiri's default 63 px (3 gu) panel. 95 px covers it with a margin;
+  # Android's 104 px (status_bar_height_portrait) looked too tall.
+  # Lomiri keeps indicators out of these rectangles (x y width height): the
+  # camera with 6 px on each side, and the rounded corners (radius 102 px).
+  # An indicator that would overlap a cutout jumps past it and leaves the
+  # space it did not fit into empty, so the collapsed areas are kept tight:
+  # the right side needs room for width changes (the charging bolt adds
+  # 16 px, a two-digit hour about 22 px). The right corner is narrower than
+  # the left: only the clock sits there, and its text stays clear of the curve.
   CollapsedPanelHeight: 95
   DisplayCutoutsCollapsed:
     - 0 0 34 95
-    - 488 0 104 95
-    - 1046 0 34 95
+    - 509 0 62 95
+    - 1056 0 24 95
   DisplayCutoutsExpanded:
     - 0 0 34 147
     - 488 0 104 147

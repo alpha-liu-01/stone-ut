@@ -1112,4 +1112,4 @@ Also seen: ofono now logs every binder radio message as a hex dump (`ofonod-wrap
 Image `out/halium14/boot-ut.img` SHA256 `99d80009607e497e27f9b53810e8ec35c8bde2eeb6d163cd10850258b5590cbf` (copy `boot-ut-99d80009.img`), kernel `#20`.
 - It is `69b9f797…` plus `bt-address.sh` and its service, `71-stone-uhid.rules`, and the new `call_volume.py` and `call-audio-router.py`.
 - The last three are byte-identical to the tested files. `bt-address.sh` gets its first real run at the first boot: it should adopt the address file from the live test as canonical.
-- Kernel and recovery identical. Not yet written.
+- Kernel and recovery identical. Not written: superseded by `16e2850b…`, which adds the tighter panel cutouts (`docs/roadmap-release.md` item 16).
