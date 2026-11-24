@@ -54,6 +54,7 @@ Checked 2026-11-11 for this document:
 15. Android log (logcat) reads back empty.
 16. Top panel: an indicator sits on the front camera.
 17. Unofficial distribution: publish the port without waiting for UBports' approval.
+18. Install on either slot: crDroid on slot `_a` hung on the boot logo.
 
 ## 1. Recovery
 
@@ -695,6 +696,15 @@ Planned steps:
 1. List per variant what the vendor selects by SKU (panels in the device tree, mixer paths, camera configs).
 2. Find testers for `sunstone_global` and `moonstone`; give them the checklist from item 11.
 
+### First tester report: Redmi Note 12 5G, India (2026-11-24, XDA)
+
+An 8/256 GB unit on crDroid 10.11. It has the same panel as this unit (`m17_38_0c_0a_fhdp_dsc_vid`).
+- It first hung on the boot logo because crDroid was on slot `_a`: see item 18. After the tester patched that by hand, it booted into Lomiri.
+- The three SHA256-pinned vendor files matched their `vendor_a` unchanged, so the Indian vendor build is the same as this unit's.
+- **Works:** display, brightness, flashlight; the SIM (Vi), VoLTE registration, incoming and outgoing calls with the microphone, mobile data; Wi-Fi; adb.
+- Userdata was grown to the full partition (204 GB free).
+- Not reported yet: Bluetooth, cameras, deep sleep.
+
 ## 11. Features not yet checked
 
 From UBports' matrix and the hardware documents:
@@ -1054,6 +1064,39 @@ Planned steps:
 5. Optional: `stone.yml` for `ubports-installer --file`, from `docs/install.md`.
 6. Announce it: a thread in the UBports forum's ports section, linking the install guide, the known issues and where to report problems.
 7. Later, optional: items 8 and 9. The device page accepts a port with a "manual install" link. The installer's standard flow uses system-image, which this port does not, so a `installer-configs` entry needs custom steps or item 6's move.
+
+## 18. Install on either slot
+
+Goal: the port boots whichever slot crDroid was installed to.
+
+What was seen (first tester report, item 10):
+- The tester's crDroid sideload landed on slot `_a`, and the phone hung on the boot logo.
+- `stone-dynparts.py` had mapped `/dev/mapper/vendor_a`, following `androidboot.slot_suffix`. But `stone-vendor-fixups.py` had `/dev/mapper/vendor_b` written in. It logged `/dev/mapper/vendor_b missing` and patched nothing.
+- Without the `vndservicemanager` patch, vndservicemanager aborts with SELinux off. lightdm with the composer (HWC2) and bluebinder then restarted in a loop.
+- The tester changed the path to `vendor_a` in the ramdisk, and it booted.
+
+Why: this unit has always run slot `_b`, so the hardcoded path never failed here. A sideload goes to the inactive slot, so either slot is normal. Everything else already follows the slot:
+- `stone-dynparts.py`;
+- Halium's `lxc-android-config` (`common.sh` reads `/proc/bootconfig`, then `androidboot.slot_suffix` on the command line);
+- the install guide, which flashes `boot` to the current slot.
+
+### Fix (2026-11-24)
+
+- `stone-vendor-fixups.py` takes the slot from `androidboot.slot_suffix`, like `stone-dynparts.py` (or from its first argument), and opens `/dev/mapper/vendor<suffix>`.
+- Without a suffix of `_a` or `_b` it changes nothing and says so. The SHA256 pins are unchanged.
+- The comment in `init` no longer says `_b`.
+
+Test on this unit (slot `_b`), `tools/phone-debug/stone-vendor-fixups-slot-test.sh`. It runs the new script against the real `vendor_b` and writes to a temporary directory, not to the overlay in use.
+1. With no argument it read `_b` from the command line. Its three files (`bin/vndservicemanager`, `build.prop`, `etc/camera/camxoverridesettings.txt`) are byte-identical to the overlay in use.
+2. Forced to `_a`, it opened `/dev/mapper/vendor_a`, which is not mapped on this unit, so it stopped with "missing".
+3. With an unusable suffix it left the vendor alone.
+
+Not tested here: a real boot from slot `_a`, because this unit's slot `_a` holds another Android. The tester's hand-patched ramdisk did the same thing and booted. Their next boot image will confirm it.
+
+- Image `out/halium14/boot-ut.img` SHA256 `f67b7e3f1bae71862f4e4bfc03a85d1d9c10a039ab4b30739d505fdaa5c30867` (copy `boot-ut-f67b7e3f.img`), kernel `#20`.
+- It is `16e2850b…` (item 16) plus the new `stone-vendor-fixups.py` and the `init` comment. The script in the image is byte-identical to the tested one.
+- Kernel identical. The recovery's 466 files are identical; its archive differs only in cpio inode numbers and timestamps.
+- Not yet written.
 
 ## Sources
 

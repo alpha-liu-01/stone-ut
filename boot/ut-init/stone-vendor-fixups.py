@@ -1,9 +1,13 @@
 #!/usr/bin/python3
-"""Fixups for vendor_b, installed into the Halium overlay.
+"""Fixups for the active slot's vendor partition, installed into the Halium
+overlay.
 
 Runs chrooted in the Ubuntu Touch root after stone-dynparts.py has created
-/dev/mapper/vendor_b. Every patch is pinned to the SHA256 of the original
-file; a different vendor build is left alone.
+/dev/mapper/vendor<suffix>. The slot comes from androidboot.slot_suffix on
+the kernel command line, as in stone-dynparts.py and Halium's
+lxc-android-config: crDroid can be installed on either slot (a sideload
+goes to the inactive one). Every patch is pinned to the SHA256 of the
+original file; a different vendor build is left alone.
 """
 import hashlib
 import os
@@ -97,8 +101,20 @@ def patch(rel, spec, vendor):
     print(f"{rel}: patched {len(spec['nops'])} sites -> {out}")
 
 
+def slot_suffix():
+    for arg in open("/proc/cmdline").read().split():
+        if arg.startswith("androidboot.slot_suffix="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
 def main():
-    dev = "/dev/mapper/vendor_b"
+    suffix = sys.argv[1] if len(sys.argv) > 1 else slot_suffix()
+    if suffix not in ("_a", "_b"):
+        print(f"no usable slot suffix ({suffix!r}); vendor left alone")
+        return 1
+    dev = f"/dev/mapper/vendor{suffix}"
+    print(f"slot suffix {suffix}, vendor is {dev}")
     if not os.path.exists(dev):
         print(f"{dev} missing")
         return 1

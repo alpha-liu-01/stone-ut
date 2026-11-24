@@ -200,7 +200,9 @@ mount --move /sys /newroot/sys || fail "could not move /sys"
 mount --move /dev /newroot/dev || fail "could not move /dev"
 
 # vendor and odm live in super. Halium's mount-android-partitions finds
-# them as /dev/mapper/<name>_b, which nothing else creates before udev.
+# them as /dev/mapper/<name><slot suffix> (androidboot.slot_suffix, _a or
+# _b, whichever slot crDroid was installed to), which nothing else creates
+# before udev. dynparts.py and vendor-fixups.py read the same suffix.
 mkdir -p /newroot/stone
 cp /stone-dynparts.py /newroot/stone/dynparts.py
 chroot /newroot /usr/bin/python3 /stone/dynparts.py \

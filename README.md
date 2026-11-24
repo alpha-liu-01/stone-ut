@@ -35,6 +35,7 @@ Tested on one `sunstone_cn` unit (Redmi Note 12 5G, China) in November 2026.
 | Model | Codename | Status |
 |---|---|---|
 | Redmi Note 12 5G (China) | `sunstone_cn` | tested |
+| Redmi Note 12 5G (India) | — | reported working by a tester (display, calls, VoLTE, data, Wi-Fi); Bluetooth and cameras not reported yet |
 | Redmi Note 12 5G (global) | `sunstone_global` | untested; has NFC |
 | POCO X5 5G | `moonstone` | untested; different SoC (SM6375), NFC |
 
